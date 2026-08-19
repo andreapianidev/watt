@@ -62,8 +62,17 @@ enum Preferences {
 
     static var barDisplay: BarDisplay {
         get {
-            BarDisplay(rawValue: UserDefaults.standard.string(forKey: "barDisplay") ?? "")
-                ?? .socMax
+            let stored = UserDefaults.standard.string(forKey: "barDisplay") ?? ""
+            if let known = BarDisplay(rawValue: stored) { return known }
+            // Valori scritti da versioni precedenti, quando i casi erano
+            // `frequency`, `temperature` e `both`. Senza questa traduzione un
+            // rinominare interno cancella in silenzio una scelta dell'utente,
+            // che se la ritrova cambiata e non ha modo di capire perche'.
+            switch stored {
+            case "temperature": return .socMax
+            case "both":        return .freqAndTemp
+            default:            return .freqAndTemp
+            }
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "barDisplay") }
     }
