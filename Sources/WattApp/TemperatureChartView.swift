@@ -13,30 +13,26 @@ final class TemperatureChartView: NSView {
     /// Soglia di allerta, tracciata come riferimento orizzontale.
     var warningCelsius: Double = 90 { didSet { needsDisplay = true } }
 
-    /// Margini interni. Quelli laterali sono generosi di proposito: il
-    /// grafico occupa tutta la larghezza del menu, e senza respiro ai lati
-    /// sembrerebbe incollato ai bordi.
-    private let insets = NSEdgeInsets(top: 22, left: 20, bottom: 18, right: 20)
+    /// Margini interni allineati al rientro del testo delle voci di menu,
+    /// cosi' il grafico comincia e finisce dove cominciano e finiscono le
+    /// scritte invece che ai bordi della finestra.
+    private let insets = NSEdgeInsets(top: 22, left: 14, bottom: 18, right: 14)
 
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: 112)
-    }
+    /// Larghezza minima; `stretchChartToMenuWidth()` la porta a quella del
+    /// menu a ogni apertura.
+    override var intrinsicContentSize: NSSize { NSSize(width: 260, height: 108) }
 
-    /// Allarga la vista fino alla larghezza del menu che la contiene.
-    ///
-    /// Una vista dentro una voce di menu conserva la larghezza che le si
-    /// assegna: non viene stirata come farebbe in uno stack. Il menu invece si
-    /// dimensiona sulla voce piu' larga, quindi la larghezza giusta si conosce
-    /// solo qui, appena prima di disegnare.
-    override func viewWillDraw() {
-        super.viewWillDraw()
-        guard let width = enclosingMenuItem?.menu?.size.width, width > 1 else {
-            return
-        }
-        if abs(frame.width - width) > 0.5 {
-            frame.size.width = width
-        }
-    }
+    // Larghezza fissa, deliberatamente.
+    //
+    // Adattarla a `menu.size.width` sembrava la cosa giusta ma innesca una
+    // retroazione: la vista si allarga fino al menu, il menu si allarga per
+    // contenere la vista, e al disegno successivo si ricomincia. Il menu
+    // cresceva fino a occupare tutto lo schermo, con i valori delle righe
+    // tagliati fuori.
+    //
+    // 300 punti stanno appena oltre il tab stop delle righe informative, che
+    // e' cio' che stabilisce davvero la larghezza del menu: il grafico la
+    // riempie senza mai deciderla.
 
     override func draw(_ dirtyRect: NSRect) {
         let plot = NSRect(

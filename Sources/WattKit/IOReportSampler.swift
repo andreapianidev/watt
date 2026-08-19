@@ -149,6 +149,7 @@ public final class IOReportSampler {
               let delta = createDelta(earlier, current, nil)?.takeRetainedValue()
         else { return reading }
 
+        trace.removeAll()
         var pMHz: Double?
         var eMHz: Double?
 
@@ -157,7 +158,17 @@ public final class IOReportSampler {
             guard group == "CPU Stats" else { return 0 }
             let name = channelName(channel)?.takeUnretainedValue() as String? ?? ""
 
-            let isPerformance = name.uppercased().hasPrefix("P")
+            // Solo i canali di *complesso*, per nome esatto.
+            //
+            // La sottoscrizione restituisce anche i canali per-core (PCPU,
+            // ECPU, PCPU0…3). Accettando qualunque nome che inizi per "P"
+            // vinceva l'ultimo canale iterato, che spesso e' un singolo core:
+            // un core attivo da solo sta vicino al massimo, e la barra dei
+            // menu mostrava 3,3 GHz mentre il cluster ne faceva 1,5.
+            let upper = name.uppercased()
+            guard upper == "PCPM" || upper == "ECPM" else { return 0 }
+
+            let isPerformance = upper == "PCPM"
             let states = isPerformance ? pStates : eStates
             guard let mhz = averageFrequency(channel: channel, states: states)
             else { return 0 }
@@ -171,6 +182,13 @@ public final class IOReportSampler {
         return reading
     }
 
+    /// Traccia dell'ultimo calcolo, per la diagnostica da riga di comando.
+    private var trace: [String] = []
+
+    public func dumpLastComputation() {
+        for line in trace { print("   " + line) }
+    }
+
     /// Media delle frequenze pesata sulla residenza in ciascuno stato DVFS.
     ///
     /// Gli stati di riposo sono esclusi: la domanda a cui la barra dei menu
@@ -181,6 +199,9 @@ public final class IOReportSampler {
         var weighted = 0.0
         var total = 0.0
         var frequencyIndex = 0
+        let name = channelName(channel)?.takeUnretainedValue() as String? ?? "?"
+        trace.append("canale \(name), \(stateCount(channel)) stati, "
+                   + "\(states.count) frequenze note")
 
         for index in 0..<stateCount(channel) {
             let label = (stateName(channel, index)?.takeUnretainedValue() as String? ?? "")
@@ -192,10 +213,15 @@ public final class IOReportSampler {
             defer { frequencyIndex += 1 }
             guard frequencyIndex < states.count else { continue }
             let residency = Double(stateResidency(channel, index))
+            trace.append(String(format: "  [%2d] %-8@ -> %6.0f MHz  residenza %d",
+                                index, label as NSString,
+                                states[frequencyIndex], Int(residency)))
             weighted += states[frequencyIndex] * residency
             total += residency
         }
         guard total > 0 else { return nil }
+        trace.append(String(format: "  somma pesata %.0f / totale %.0f = %.0f MHz",
+                            weighted, total, weighted / total))
         return weighted / total
     }
 

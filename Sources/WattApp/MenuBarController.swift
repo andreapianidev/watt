@@ -32,7 +32,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var cadenceItems: [NSMenuItem] = []
     private var suspendItem = NSMenuItem()
     private var diagnosisRoot = NSMenuItem()
-    private var explanationItems: [NSMenuItem] = []
     private var alertsToggle = NSMenuItem()
     private let chartView = TemperatureChartView()
     private let chartItem = NSMenuItem()
@@ -69,6 +68,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// Sta prima dei profili perche' e' l'informazione che serve per primo:
     /// quale delle cause possibili ti sta rallentando adesso. Quattro volte su
     /// cinque non e' quella che immagini, e nessun profilo la risolve.
+    /// Porta il grafico alla larghezza del menu, una volta per apertura.
+    ///
+    /// Il trucco e' azzerarlo prima di misurare: `menu.size` si calcola sulle
+    /// voci presenti, grafico compreso, quindi leggendola con il grafico gia'
+    /// largo si otterrebbe la larghezza che il grafico stesso ha imposto. Fatto
+    /// a ogni disegno invece che all'apertura, questo diventa una retroazione
+    /// che allarga il menu fino a coprire lo schermo.
+    private func stretchChartToMenuWidth() {
+        chartView.frame.size.width = 1
+        let width = menu.size.width
+        guard width > 1 else { return }
+        chartView.frame.size.width = width
+        chartView.needsDisplay = true
+    }
+
     private func renderDiagnosis() {
         guard let submenu = diagnosisRoot.submenu else { return }
         submenu.autoenablesItems = false
@@ -82,7 +96,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
 
-        diagnosisRoot.title = first.title
+        // Il titolo va accorciato: una voce di menu larga quanto la frase
+        // piu' lunga costringe tutte le altre alla stessa larghezza, e il
+        // menu diventa una parete. Il testo intero resta nel sottomenu.
+        diagnosisRoot.title = Self.shortened(first.title, limit: 34)
         diagnosisRoot.image = NSImage(systemSymbolName: first.severity.symbolName,
                                       accessibilityDescription: nil)
 
@@ -118,6 +135,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 submenu.addItem(action)
             }
         }
+    }
+
+    /// Tronca a parola intera, con i puntini, per non allargare il menu.
+    private static func shortened(_ text: String, limit: Int) -> String {
+        guard text.count > limit else { return text }
+        var result = ""
+        for word in text.split(separator: " ") {
+            if result.count + word.count + 1 > limit - 1 { break }
+            result += result.isEmpty ? String(word) : " " + word
+        }
+        return (result.isEmpty ? String(text.prefix(limit - 1)) : result) + "…"
     }
 
     private static func remedyLabel(_ remedy: Diagnosis.Remedy) -> String {
@@ -179,18 +207,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             profileItems[profile] = item
         }
 
-        // Descrizione del profilo scelto, sempre a schermo.
-        //
-        // Prima stava solo nel tooltip, dove non la leggeva nessuno: la
-        // differenza fra "Prestazioni" e "Massimo" non e' deducibile dai nomi,
-        // e un selettore le cui voci non si capiscono e' un selettore che si
-        // usa a caso.
-        for _ in 0..<3 {
-            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            menu.addItem(item)
-            explanationItems.append(item)
-        }
-
         menu.addItem(.separator())
 
         // Righe informative: sola lettura, riflettono lo stato reale letto
@@ -202,19 +218,68 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        // Larghezza di partenza: `viewWillDraw` la riporta a quella del menu
-        // non appena questo si dimensiona.
-        chartView.frame = NSRect(x: 0, y: 0, width: 300, height: 112)
+        chartView.frame = NSRect(x: 0, y: 0, width: 300, height: 108)
         chartItem.view = chartView
         menu.addItem(chartItem)
+
+        // Voci di secondo piano dentro due sottomenu.
+        //
+        // A furia di aggiungere funzioni il menu era arrivato a venti righe:
+        // una parete che costringe a leggere tutto per trovare una cosa. In
+        // primo piano restano lo stato e le azioni frequenti; il resto sta un
+        // livello sotto, dove non ingombra ma si trova lo stesso.
+        sensorsRoot = NSMenuItem(title: L("All sensors"), action: nil, keyEquivalent: "")
+        sensorsRoot.submenu = NSMenu()
+        sensorsRoot.image = NSImage(systemSymbolName: "thermometer.variable",
+                                    accessibilityDescription: nil)
+        menu.addItem(sensorsRoot)
+
+        buildKeepAwakeSubmenu()
+
+        // --- Azioni ---
+        let actionsRoot = NSMenuItem(title: L("Actions"), action: nil, keyEquivalent: "")
+        let actionsMenu = NSMenu()
+        actionsMenu.autoenablesItems = false
+
+        throttleRoot = NSMenuItem(title: L("Background processes"), action: nil,
+                                  keyEquivalent: "")
+        throttleRoot.submenu = NSMenu()
+        actionsMenu.addItem(throttleRoot)
+
+        suspendItem = NSMenuItem(title: L("Freeze deferrable services"),
+                                 action: #selector(toggleSuspension),
+                                 keyEquivalent: "")
+        suspendItem.target = self
+        suspendItem.toolTip = L("Stops Spotlight indexing, photo analysis, "
+                              + "backups and updates with SIGSTOP. They resume "
+                              + "exactly where they left off, and unfreeze by "
+                              + "themselves after half an hour.")
+        actionsMenu.addItem(suspendItem)
+
+        let purge = NSMenuItem(title: L("Free memory now"),
+                               action: #selector(purgeMemory), keyEquivalent: "")
+        purge.target = self
+        purge.toolTip = L("Runs purge: frees inactive memory. It also evicts "
+                        + "the file cache, so it is worth doing before a "
+                        + "build, not during one.")
+        actionsMenu.addItem(purge)
+        actionsRoot.submenu = actionsMenu
+        actionsRoot.image = NSImage(systemSymbolName: "wand.and.sparkles",
+                                    accessibilityDescription: nil)
+        menu.addItem(actionsRoot)
+
+        // --- Impostazioni ---
+        let settingsRoot = NSMenuItem(title: L("Settings"), action: nil,
+                                      keyEquivalent: "")
+        let settingsMenu = NSMenu()
+        settingsMenu.autoenablesItems = false
 
         let alertsRoot = NSMenuItem(title: L("Temperature alerts"), action: nil,
                                     keyEquivalent: "")
         let alertsMenu = NSMenu()
         alertsMenu.autoenablesItems = false
         alertsToggle = NSMenuItem(title: L("Warn me when it gets hot"),
-                                  action: #selector(toggleAlerts),
-                                  keyEquivalent: "")
+                                  action: #selector(toggleAlerts), keyEquivalent: "")
         alertsToggle.target = self
         alertsMenu.addItem(alertsToggle)
         alertsMenu.addItem(.separator())
@@ -228,18 +293,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             thresholdItems.append(item)
         }
         alertsRoot.submenu = alertsMenu
-        alertsRoot.image = NSImage(systemSymbolName: "bell",
-                                   accessibilityDescription: nil)
-        menu.addItem(alertsRoot)
-
-        sensorsRoot = NSMenuItem(title: L("All sensors"), action: nil, keyEquivalent: "")
-        sensorsRoot.submenu = NSMenu()
-        sensorsRoot.image = NSImage(systemSymbolName: "thermometer.variable",
-                                    accessibilityDescription: nil)
-        menu.addItem(sensorsRoot)
-
-        menu.addItem(.separator())
-        buildKeepAwakeSubmenu()
+        settingsMenu.addItem(alertsRoot)
 
         let cadenceRoot = NSMenuItem(title: L("Refresh rate"), action: nil,
                                      keyEquivalent: "")
@@ -255,9 +309,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             cadenceItems.append(item)
         }
         cadenceRoot.submenu = cadenceMenu
-        cadenceRoot.image = NSImage(systemSymbolName: "timer",
-                                    accessibilityDescription: nil)
-        menu.addItem(cadenceRoot)
+        settingsMenu.addItem(cadenceRoot)
 
         let displayRoot = NSMenuItem(title: L("Show in menu bar"), action: nil,
                                      keyEquivalent: "")
@@ -273,56 +325,53 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             barDisplayItems.append(item)
         }
         displayRoot.submenu = displayMenu
-        menu.addItem(displayRoot)
+        settingsMenu.addItem(displayRoot)
 
-        throttleRoot = NSMenuItem(title: L("Background processes"), action: nil,
-                                  keyEquivalent: "")
-        throttleRoot.image = NSImage(systemSymbolName: "gauge.with.dots.needle.33percent",
-                                     accessibilityDescription: nil)
-        throttleRoot.submenu = NSMenu()
-        menu.addItem(throttleRoot)
-
-        suspendItem = NSMenuItem(title: L("Freeze deferrable services"),
-                                 action: #selector(toggleSuspension),
-                                 keyEquivalent: "")
-        suspendItem.target = self
-        suspendItem.image = NSImage(systemSymbolName: "pause.circle",
-                                    accessibilityDescription: nil)
-        suspendItem.toolTip = L("Stops Spotlight indexing, photo analysis, "
-                              + "backups and updates with SIGSTOP. They resume "
-                              + "exactly where they left off, and unfreeze by "
-                              + "themselves after half an hour.")
-        menu.addItem(suspendItem)
-
-        let purge = NSMenuItem(title: L("Free memory now"),
-                               action: #selector(purgeMemory),
-                               keyEquivalent: "")
-        purge.target = self
-        purge.image = NSImage(systemSymbolName: "memorychip",
-                              accessibilityDescription: nil)
-        purge.toolTip = L("Runs purge: frees inactive memory. It also evicts "
-                        + "the file cache, so it is worth doing before a "
-                        + "build, not during one.")
-        menu.addItem(purge)
-
-        menu.addItem(.separator())
-
+        settingsMenu.addItem(.separator())
         launchItem = NSMenuItem(title: L("Open at login"),
                                 action: #selector(toggleLaunchAtLogin),
                                 keyEquivalent: "")
         launchItem.target = self
-        menu.addItem(launchItem)
+        settingsMenu.addItem(launchItem)
 
         let uninstall = NSMenuItem(title: L("Restore settings and remove helper"),
                                    action: #selector(uninstallHelper),
                                    keyEquivalent: "")
         uninstall.target = self
-        menu.addItem(uninstall)
+        settingsMenu.addItem(uninstall)
+
+        settingsRoot.submenu = settingsMenu
+        settingsRoot.image = NSImage(systemSymbolName: "gearshape",
+                                     accessibilityDescription: nil)
+        menu.addItem(settingsRoot)
+
+        menu.addItem(.separator())
+
+        let explain = NSMenuItem(title: L("What the profiles do…"),
+                                 action: #selector(explainProfiles),
+                                 keyEquivalent: "")
+        explain.target = self
+        menu.addItem(explain)
 
         let quit = NSMenuItem(title: L("Quit"), action: #selector(quit),
                               keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
+    }
+
+    /// Le quattro descrizioni a confronto, in una finestrella.
+    ///
+    /// Stavano nei tooltip, dove non le legge nessuno, e come righe sempre a
+    /// schermo allargavano il menu quanto la frase piu' lunga. Qui si leggono
+    /// una volta e non ingombrano mai piu'.
+    @objc private func explainProfiles() {
+        let alert = NSAlert()
+        alert.messageText = L("What the profiles do")
+        alert.informativeText = PowerProfile.allCases
+            .map { "\($0.title.uppercased())\n\($0.explanation)" }
+            .joined(separator: "\n\n")
+        alert.addButton(withTitle: L("OK"))
+        alert.runModal()
     }
 
     private func buildKeepAwakeSubmenu() {
@@ -463,18 +512,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         for (profile, item) in profileItems {
             item.state = (profile == controller.profile) ? .on : .off
         }
-
-        let lines = Self.wrapped(controller.profile.explanation, width: 58)
-        for (index, item) in explanationItems.enumerated() {
-            guard index < lines.count else { item.isHidden = true; continue }
-            item.isHidden = false
-            item.attributedTitle = NSAttributedString(
-                string: "  " + lines[index],
-                attributes: [
-                    .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                ])
-        }
     }
 
     private func renderStateRows() {
@@ -592,6 +629,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func renderKeepAwake() {
         keepAwakeRoot.title = L("Keep awake: %@", keepAwakeSummary())
+        // La precisazione sul profilo che impedisce comunque la sospensione
+        // stava nel titolo e da sola allargava il menu di meta': come tooltip
+        // resta disponibile senza costare larghezza a tutte le altre voci.
+        keepAwakeRoot.toolTip = controller.sleepPrevented && !controller.keepAwake.isActive
+            ? L("The current profile prevents sleep anyway.") : nil
         keepAwakeRoot.image = NSImage(
             systemSymbolName: controller.keepAwake.isActive
                 ? "cup.and.saucer.fill" : "cup.and.saucer",
@@ -615,9 +657,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // "disattivata" mentre il Mac non puo' comunque dormire sarebbe
             // falso, ed e' il tipo di bugia che fa perdere fiducia in tutto
             // il resto di quello che il menu mostra.
-            return controller.sleepPrevented
-                ? L("off (but the profile prevents sleep)")
-                : L("off")
+            return L("off")
         case .indefinite:
             return L("always on")
         case .duration:
@@ -639,7 +679,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// le colonne restano allineate a qualunque larghezza.
     private static func row(label: String, value: String) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: 300)]
+        // 260 punti: e' il tab stop che decide la larghezza minima del menu,
+        // perche' ogni riga informativa arriva almeno fin li'. Allargarlo per
+        // far stare un'etichetta lunga gonfia l'intero menu.
+        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: 260)]
 
         let attributed = NSMutableAttributedString(
             string: label + "\t",
@@ -770,6 +813,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         isMenuOpen = true
+        stretchChartToMenuWidth()
         controller.adoptExternalProfileChange()
         controller.refreshAllSensors()
         controller.refreshDiagnosis()

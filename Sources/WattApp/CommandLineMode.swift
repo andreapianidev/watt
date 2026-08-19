@@ -99,6 +99,17 @@ enum CommandLineMode {
             print(L("normal priority restored"))
             return true
 
+        case "--debug-freq":
+            // Diagnostica: stampa il calcolo della frequenza passo per passo.
+            guard let sampler = IOReportSampler() else { fail("IOReport non disponibile") }
+            Thread.sleep(forTimeInterval: 0.5)
+            let r = sampler.sample()
+            print("P-core  \(r.pCoreMHz.map { String(format: "%.0f MHz", $0) } ?? "n/d")"
+                + "  tetto \(r.pCoreCeilingMHz.map { String(format: "%.0f", $0) } ?? "?")")
+            print("E-core  \(r.eCoreMHz.map { String(format: "%.0f MHz", $0) } ?? "n/d")")
+            sampler.dumpLastComputation()
+            return true
+
         case "--diagnose":
             diagnose()
             return true

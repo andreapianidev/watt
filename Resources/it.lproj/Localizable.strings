@@ -1,6 +1,4 @@
-/* Watt — traduzione italiana.
-   La chiave e' il testo inglese: una voce mancante degrada in inglese
-   invece che in un identificatore illeggibile. */
+/* Watt — traduzione italiana. */
 
 "open at login: %@" = "apertura all'avvio: %@";
 "on" = "attivo";
@@ -82,19 +80,24 @@
 "Switch to %@" = "Passa a %@";
 "Freeze deferrable services" = "Congela i servizi differibili";
 "Slow down background processes" = "Rallenta i processi in background";
-"Temperature alerts" = "Avvisi temperatura";
-"Warn me when it gets hot" = "Avvisami quando scotta";
-"above %.0f °C" = "oltre %.0f °C";
 "All sensors" = "Tutti i sensori";
-"Refresh rate" = "Aggiornamento";
-"Show in menu bar" = "Mostra in barra";
+"Actions" = "Azioni";
 "Background processes" = "Processi in background";
 "Stops Spotlight indexing, photo analysis, backups and updates with SIGSTOP. They resume exactly where they left off, and unfreeze by themselves after half an hour." = "Ferma con SIGSTOP indicizzazione Spotlight, analisi foto, backup e aggiornamenti. Riprendono da dove erano rimasti, e si riattivano da soli dopo mezz'ora.";
 "Free memory now" = "Libera memoria adesso";
 "Runs purge: frees inactive memory. It also evicts the file cache, so it is worth doing before a build, not during one." = "Esegue purge: libera la memoria inattiva. Sfratta anche la cache dei file, quindi conviene prima di una build, non durante.";
+"Settings" = "Impostazioni";
+"Temperature alerts" = "Avvisi temperatura";
+"Warn me when it gets hot" = "Avvisami quando scotta";
+"above %.0f °C" = "oltre %.0f °C";
+"Refresh rate" = "Aggiornamento";
+"Show in menu bar" = "Mostra in barra";
 "Open at login" = "Apri all'avvio";
 "Restore settings and remove helper" = "Ripristina impostazioni e rimuovi helper";
+"What the profiles do…" = "Cosa fanno i profili…";
 "Quit" = "Esci";
+"What the profiles do" = "Cosa fanno i profili";
+"OK" = "Ho capito";
 "Keeps the Mac awake while xcodebuild, swift-frontend, cargo, ninja, ffmpeg and similar tools are running." = "Tiene sveglio il Mac finché sono in esecuzione xcodebuild, swift-frontend, cargo, ninja, ffmpeg e simili.";
 "Keep the display on too" = "Tieni acceso anche lo schermo";
 "Keep awake" = "Sveglia";
@@ -117,7 +120,7 @@
 "Restore normal priority" = "Ripristina priorità normale";
 "Slow down heavy background processes" = "Rallenta i background che consumano";
 "No readable sensors" = "Nessun sensore leggibile";
-"off (but the profile prevents sleep)" = "disattivata (ma il profilo impedisce la sospensione)";
+"The current profile prevents sleep anyway." = "Il profilo attuale impedisce comunque la sospensione.";
 "always on" = "sempre attiva";
 "expired" = "scaduta";
 "%d min" = "%d min";
@@ -130,7 +133,6 @@
 "Restore and remove" = "Ripristina e rimuovi";
 "Cancel" = "Annulla";
 "Restore incomplete" = "Ripristino incompleto";
-"OK" = "Ho capito";
 "P-core frequency" = "Frequenza P-core";
 "Peak temperature" = "Temperatura massima";
 "Average temperature" = "Temperatura media";
