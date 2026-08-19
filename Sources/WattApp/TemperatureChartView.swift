@@ -1,4 +1,5 @@
 import AppKit
+import WattKit
 
 /// Grafico delle temperature disegnato dentro una voce di menu.
 ///
@@ -12,9 +13,30 @@ final class TemperatureChartView: NSView {
     /// Soglia di allerta, tracciata come riferimento orizzontale.
     var warningCelsius: Double = 90 { didSet { needsDisplay = true } }
 
-    private let insets = NSEdgeInsets(top: 22, left: 12, bottom: 18, right: 12)
+    /// Margini interni. Quelli laterali sono generosi di proposito: il
+    /// grafico occupa tutta la larghezza del menu, e senza respiro ai lati
+    /// sembrerebbe incollato ai bordi.
+    private let insets = NSEdgeInsets(top: 22, left: 20, bottom: 18, right: 20)
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 280, height: 108) }
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: 112)
+    }
+
+    /// Allarga la vista fino alla larghezza del menu che la contiene.
+    ///
+    /// Una vista dentro una voce di menu conserva la larghezza che le si
+    /// assegna: non viene stirata come farebbe in uno stack. Il menu invece si
+    /// dimensiona sulla voce piu' larga, quindi la larghezza giusta si conosce
+    /// solo qui, appena prima di disegnare.
+    override func viewWillDraw() {
+        super.viewWillDraw()
+        guard let width = enclosingMenuItem?.menu?.size.width, width > 1 else {
+            return
+        }
+        if abs(frame.width - width) > 0.5 {
+            frame.size.width = width
+        }
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         let plot = NSRect(
@@ -88,17 +110,17 @@ final class TemperatureChartView: NSView {
 
     private func drawHeader() {
         let latest = history.latest
-        let title = attributed("Temperatura", size: NSFont.smallSystemFontSize,
+        let title = attributed(L("Temperature"), size: NSFont.smallSystemFontSize,
                                color: .secondaryLabelColor)
         title.draw(at: NSPoint(x: insets.left, y: bounds.height - 18))
 
         guard let latest else { return }
         let legend = NSMutableAttributedString()
         legend.append(attributed("● ", size: 11, color: .systemOrange))
-        legend.append(attributed(String(format: "max %.0f°  ", latest.maximum),
+        legend.append(attributed(L("peak %.0f°  ", latest.maximum),
                                  size: 11, color: .labelColor))
         legend.append(attributed("● ", size: 11, color: .systemTeal))
-        legend.append(attributed(String(format: "media %.0f°", latest.average),
+        legend.append(attributed(L("avg %.0f°", latest.average),
                                  size: 11, color: .labelColor))
         legend.draw(at: NSPoint(x: bounds.width - insets.right - legend.size().width,
                                 y: bounds.height - 18))
@@ -113,13 +135,13 @@ final class TemperatureChartView: NSView {
             .draw(at: NSPoint(x: 2, y: plot.minY - 4))
 
         let minutes = Double(history.points.count) * 5 / 60
-        attributed(String(format: "ultimi %.0f min", max(minutes, 1)),
+        attributed(L("last %.0f min", max(minutes, 1)),
                    size: 9, color: .tertiaryLabelColor)
             .draw(at: NSPoint(x: plot.minX, y: 3))
     }
 
     private func drawPlaceholder(in plot: NSRect) {
-        let text = attributed("Raccolta dati in corso…", size: 11,
+        let text = attributed(L("Collecting data…"), size: 11,
                               color: .tertiaryLabelColor)
         text.draw(at: NSPoint(x: plot.midX - text.size().width / 2,
                               y: plot.midY - 6))

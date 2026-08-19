@@ -76,11 +76,10 @@ struct Diagnosis {
         if findings.allSatisfy({ $0.severity <= .info }) {
             findings.insert(Finding(
                 severity: .ok,
-                title: "Nessun collo di bottiglia rilevato",
-                measured: sample?.pCoreSummary.map { "P-core a \($0)" } ?? "",
-                advice: "La macchina sta girando senza limitazioni. Se un "
-                      + "lavoro ti sembra lento, il collo di bottiglia non è "
-                      + "in questa macchina.",
+                title: L("No bottleneck detected"),
+                measured: sample?.pCoreSummary.map { L("P-cores at %@", $0) } ?? "",
+                advice: L("The machine is running unrestricted. If something feels "
+                        + "slow, the bottleneck is not in this Mac."),
                 basis: nil), at: 0)
         }
         return findings.sorted { $0.severity > $1.severity }
@@ -92,13 +91,13 @@ struct Diagnosis {
         guard state?.lowPowerMode == true else { return [] }
         return [Finding(
             severity: .critical,
-            title: "Low Power Mode è attivo",
-            measured: "risparmio energetico acceso",
-            advice: "È l'unica impostazione che abbassa davvero il clock, ed è "
-                  + "facile lasciarla accesa senza accorgersene: macOS la "
-                  + "propone quando la batteria scende.",
-            basis: "misurato su questo Mac: stesso lavoro in 10,68 s contro "
-                 + "6,66 s, cioè il 60% in più",
+            title: L("Low Power Mode is on"),
+            measured: L("power saving enabled"),
+            advice: L("It is the only setting that genuinely lowers the clock, "
+                    + "and it is easy to leave on without noticing: macOS "
+                    + "offers it when the battery runs low."),
+            basis: L("measured on this Mac: the same work took 10.68 s versus "
+                   + "6.66 s, i.e. 60%% longer"),
             remedy: .switchProfile(.automatico))]
     }
 
@@ -123,27 +122,28 @@ struct Diagnosis {
 
             findings.append(Finding(
                 severity: memory.swapUsedBytes > 4_294_967_296 ? .critical : .warning,
-                title: "La RAM non basta: il sistema sta scrivendo su disco",
-                measured: "\(memory.swapText) di swap in uso, "
-                        + "\(MemoryReader.Snapshot.gigabytes(memory.compressedBytes)) compressi",
-                advice: "Chiudi ciò che non ti serve adesso"
-                      + (hogs.isEmpty ? "" : " — i più ingombranti sono \(hogs)")
-                      + ". «Libera memoria» non aiuta in questo caso: purge "
-                      + "scarta la cache dei file, non riporta in RAM ciò che "
-                      + "è già finito sullo swap.",
-                basis: "una pagina letta dallo swap costa ordini di grandezza "
-                     + "più di una in RAM, e nessun profilo energetico la "
-                     + "sposta di un microsecondo"))
+                title: L("Not enough RAM: the system is writing to disk"),
+                measured: L("%@ of swap in use, %@ compressed",
+                            memory.swapText,
+                            MemoryReader.Snapshot.gigabytes(memory.compressedBytes)),
+                advice: L("Close what you do not need right now")
+                      + (hogs.isEmpty ? "" : L(" — the largest are %@", hogs))
+                      + L(". \"Free memory\" will not help here: purge discards "
+                        + "the file cache, it does not bring back what has "
+                        + "already been swapped out."),
+                basis: L("reading a page from swap costs orders of magnitude more "
+                       + "than from RAM, and no power profile moves it by a "
+                       + "microsecond")))
         }
 
         if memory.pressureLevel >= 4 {
             findings.append(Finding(
                 severity: .critical,
-                title: "Pressione di memoria critica",
-                measured: "livello \(memory.pressureLevel) riportato dal kernel",
-                advice: "macOS sta comprimendo e sfrattando pagine per stare "
-                      + "in piedi. È la condizione in cui tutto diventa lento "
-                      + "senza che la CPU risulti occupata.",
+                title: L("Critical memory pressure"),
+                measured: L("level %d reported by the kernel", Int(memory.pressureLevel)),
+                advice: L("macOS is compressing and evicting pages just to stay "
+                        + "afloat. This is the state where everything feels "
+                        + "slow while the CPU looks idle."),
                 basis: nil))
         }
         return findings
@@ -161,14 +161,14 @@ struct Diagnosis {
         let fraction = sample.pCoreCeilingFraction ?? 1
         return [Finding(
             severity: fraction < 0.6 ? .critical : .warning,
-            title: "Le prestazioni sono limitate dal calore",
-            measured: String(format: "%.0f%% del massimo — %@",
-                             fraction * 100, sample.pCoreSummary ?? ""),
-            advice: "Non esiste software che lo eviti su un Mac senza ventola. "
-                  + "Puoi solo ridurre il carico, dargli tregua, o sollevarlo "
-                  + "dal piano per far circolare aria sotto la scocca.",
-            basis: "misurato: sotto carico prolungato questa macchina passa da "
-                 + "3143 a 1188 MHz in circa 90 secondi")]
+            title: L("Performance is being limited by heat"),
+            measured: L("%.0f%% of maximum — %@",
+                        fraction * 100, sample.pCoreSummary ?? ""),
+            advice: L("No software can avoid this on a fanless Mac. You can only "
+                    + "reduce the load, give it a break, or lift it off the "
+                    + "desk so air can move under the chassis."),
+            basis: L("measured: under sustained load this machine goes from "
+                   + "3143 to 1188 MHz in about 90 seconds"))]
     }
 
     /// Contesa vera: processi che consumano CPU e che non sono ciò con cui
@@ -189,13 +189,12 @@ struct Diagnosis {
 
         return [Finding(
             severity: total >= 60 ? .critical : .warning,
-            title: "Processi in background stanno competendo per la CPU",
-            measured: String(format: "%.0f%% di CPU fuori da ciò che stai usando — %@",
-                             total, worst),
-            advice: "Congelarli li ferma del tutto, e riprendono da dove erano "
-                  + "quando torni a un profilo normale.",
-            basis: "misurato: con sei processi in competizione lo stesso lavoro "
-                 + "passava da 7,4 a 12,5 s; congelandoli tornava a 6,7 s",
+            title: L("Background processes are competing for the CPU"),
+            measured: L("%.0f%% of CPU outside what you are using — %@", total, worst),
+            advice: L("Freezing them stops them entirely, and they resume where "
+                    + "they were when you go back to a normal profile."),
+            basis: L("measured: with six competing processes the same work went "
+                   + "from 7.4 to 12.5 s; freezing them brought it to 6.7 s"),
             remedy: .freezeServices)]
     }
 
@@ -206,12 +205,12 @@ struct Diagnosis {
               server.cpuPercent >= 25 else { return [] }
         return [Finding(
             severity: server.cpuPercent >= 50 ? .warning : .info,
-            title: "La composizione grafica sta consumando parecchio",
-            measured: String(format: "WindowServer al %.0f%%", server.cpuPercent),
-            advice: "Di solito significa molte finestre, animazioni, "
-                  + "trasparenze o un display esterno ad alta risoluzione. "
-                  + "Ridurre il movimento in Accessibilità e chiudere finestre "
-                  + "inutilizzate incide più di qualunque profilo energetico.",
+            title: L("Window compositing is using a lot of CPU"),
+            measured: L("WindowServer at %.0f%%", server.cpuPercent),
+            advice: L("Usually this means many windows, animations, transparency "
+                    + "or a high-resolution external display. Reducing motion "
+                    + "in Accessibility and closing unused windows matters "
+                    + "more than any power profile."),
             basis: nil)]
     }
 
@@ -225,11 +224,11 @@ struct Diagnosis {
         let total = indexers.map(\.cpuPercent).reduce(0, +)
         return [Finding(
             severity: .warning,
-            title: "Spotlight sta indicizzando",
-            measured: String(format: "%.0f%% di CPU, più I/O sul disco", total),
-            advice: "Durante una build macina proprio le cartelle che stai "
-                  + "riscrivendo: DerivedData, node_modules, target. "
-                  + "Metterlo in pausa toglie CPU e disco insieme.",
+            title: L("Spotlight is indexing"),
+            measured: L("%.0f%% of CPU, plus disk I/O", total),
+            advice: L("During a build it chews through the very folders you are "
+                    + "rewriting: DerivedData, node_modules, target. Pausing "
+                    + "it frees CPU and disk at once."),
             basis: nil,
             remedy: .freezeServices)]
     }

@@ -1,5 +1,6 @@
 import Foundation
 import IOKit.pwr_mgt
+import WattKit
 
 /// Impedisce al Mac di addormentarsi, alla maniera di Amphetamine.
 ///
@@ -21,16 +22,16 @@ final class KeepAwake {
 
         var label: String {
             switch self {
-            case .off:           return "Disattivata"
-            case .indefinite:    return "Sempre attiva"
-            case .whileBuilding: return "Durante le build"
+            case .off:           return L("Off")
+            case .indefinite:    return L("Always on")
+            case .whileBuilding: return L("While building")
             case .duration(let seconds):
                 let minutes = Int(seconds / 60)
                 if minutes % 60 == 0 {
                     let hours = minutes / 60
-                    return hours == 1 ? "1 ora" : "\(hours) ore"
+                    return hours == 1 ? L("1 hour") : L("%d hours", hours)
                 }
-                return "\(minutes) minuti"
+                return L("%d minutes", minutes)
             }
         }
     }

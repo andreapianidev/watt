@@ -50,12 +50,12 @@ enum Preferences {
 
         var label: String {
             switch self {
-            case .frequency:   return "Frequenza P-core"
-            case .socMax:      return "Temperatura massima"
-            case .socAverage:  return "Temperatura media"
-            case .battery:     return "Temperatura batteria"
-            case .storage:     return "Temperatura SSD"
-            case .freqAndTemp: return "Frequenza e temperatura"
+            case .frequency:   return L("P-core frequency")
+            case .socMax:      return L("Peak temperature")
+            case .socAverage:  return L("Average temperature")
+            case .battery:     return L("Battery temperature")
+            case .storage:     return L("SSD temperature")
+            case .freqAndTemp: return L("Frequency and temperature")
             }
         }
     }
@@ -91,10 +91,10 @@ enum Preferences {
 
         var label: String {
             switch self {
-            case .realtime: return "1 secondo (~1,7% di un core)"
-            case .fast:     return "2 secondi (~0,9%)"
-            case .normal:   return "5 secondi (~0,3%)"
-            case .relaxed:  return "10 secondi (~0,2%)"
+            case .realtime: return L("1 second (~1.7%% of a core)")
+            case .fast:     return L("2 seconds (~0.9%%)")
+            case .normal:   return L("5 seconds (~0.3%%)")
+            case .relaxed:  return L("10 seconds (~0.2%%)")
             }
         }
     }

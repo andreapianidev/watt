@@ -37,8 +37,8 @@ enum CommandLineMode {
                 fail("Uso: Watt --login <on|off>")
             }
             Preferences.launchAtLogin = (wanted == "on")
-            print("apertura all'avvio: "
-                + (Preferences.launchAtLogin ? "attiva" : "disattivata"))
+            print(L("open at login: %@",
+                    Preferences.launchAtLogin ? L("on") : L("off")))
             return true
 
         case "--uninstall":
@@ -55,20 +55,20 @@ enum CommandLineMode {
             decoder.dateDecodingStrategy = .iso8601
             guard let data,
                   let report = try? decoder.decode(SuspensionReport.self, from: data)
-            else { fail("Helper non raggiungibile.") }
+            else { fail(L("Helper unreachable.")) }
             if suspending {
                 print(report.suspended.isEmpty
-                    ? "nessun servizio differibile in esecuzione"
-                    : "congelati: " + report.suspended.joined(separator: ", "))
+                    ? L("no deferrable service is running")
+                    : L("frozen: %@", report.suspended.joined(separator: ", ")))
                 if let expiry = report.expiresAt {
                     let formatter = DateFormatter()
                     formatter.timeStyle = .short
-                    print("si riattivano da soli alle \(formatter.string(from: expiry))")
+                    print(L("they unfreeze by themselves at %@", formatter.string(from: expiry)))
                 }
             } else {
                 print(report.resumed.isEmpty
-                    ? "nessun servizio era congelato"
-                    : "riattivati: " + report.resumed.joined(separator: ", "))
+                    ? L("no service was frozen")
+                    : L("resumed: %@", report.resumed.joined(separator: ", ")))
             }
             return true
 
@@ -84,7 +84,7 @@ enum CommandLineMode {
             }
             guard let data,
                   let report = try? JSONDecoder().decode(ThrottleReport.self, from: data)
-            else { fail("Helper non raggiungibile.") }
+            else { fail(L("Helper unreachable.")) }
             print(report.summary)
             for entry in report.throttled.prefix(20) {
                 print(String(format: "   %-24@ %5.1f%%  %6.0f MB",
@@ -96,7 +96,7 @@ enum CommandLineMode {
             _ = callHelper(timeout: 60) { proxy, done in
                 proxy.restoreThrottled { done($0 ?? "") }
             } as String?
-            print("priorità normale ripristinata")
+            print(L("normal priority restored"))
             return true
 
         case "--diagnose":
@@ -105,15 +105,15 @@ enum CommandLineMode {
 
         case "--temps":
             guard let summary = ThermalSensors()?.read(), !summary.all.isEmpty else {
-                fail("Sensori termici non leggibili su questo sistema.")
+                fail(L("Thermal sensors are not readable on this system."))
             }
-            print(String(format: "SoC      : %@",
+            print(String(format: L("SoC      : %@"),
                          ThermalSensors.Summary.format(summary.socCelsius)))
-            print(String(format: "batteria : %@",
+            print(String(format: L("battery  : %@"),
                          ThermalSensors.Summary.format(summary.batteryCelsius)))
-            print(String(format: "SSD      : %@",
+            print(String(format: L("SSD      : %@"),
                          ThermalSensors.Summary.format(summary.storageCelsius)))
-            print("\n\(summary.all.count) sensori:")
+            print(L("\n%d sensors:", summary.all.count))
             for reading in summary.all {
                 print(String(format: "   %-24@ %6.1f °C",
                              reading.name as NSString, reading.celsius))
@@ -128,7 +128,7 @@ enum CommandLineMode {
             if let failure {
                 fail("purge: \(failure)")
             }
-            print("memoria disponibile: \(after?.availableText ?? "n/d")")
+            print(L("memory available: %@", after?.availableText ?? "n/a"))
             return true
 
         case "--run":
@@ -209,16 +209,16 @@ enum CommandLineMode {
         if !outcome.isEmpty {
             FileHandle.standardError.write(
                 Data("applicato con errori: \(outcome)\n".utf8))
-            print("profilo: \(profile.title)")
+            print(L("profile: %@", profile.title))
             exit(1)
         }
-        print("profilo: \(profile.title)")
+        print(L("profile: %@", profile.title))
 
         // La sospensione inibita richiede un processo vivo che tenga
         // l'assertion: da riga di comando non c'e' nessuno a tenerla, e
         // dirlo e' meglio che lasciar credere il contrario.
         if profile.plan.preventIdleSleep {
-            print("nota: la sospensione resta inibita solo con l'app in esecuzione")
+            print(L("note: sleep stays prevented only while the app is running"))
         }
     }
 
@@ -247,35 +247,35 @@ enum CommandLineMode {
             }
         }
 
-        print("profilo salvato : \(Preferences.selectedProfile.title)")
+        print(L("saved profile  : %@", Preferences.selectedProfile.title))
 
         if let reading, let mhz = reading.pCoreMHz {
             let ceiling = reading.pCoreCeilingMHz ?? 0
             print(ceiling > 0
-                ? String(format: "P-core          : %.2f di %.2f GHz", mhz / 1000, ceiling / 1000)
-                : String(format: "P-core          : %.2f GHz", mhz / 1000))
+                ? String(format: L("P-cores         : %.2f of %.2f GHz"), mhz / 1000, ceiling / 1000)
+                : String(format: L("P-cores         : %.2f GHz"), mhz / 1000))
         }
         if let mhz = reading?.eCoreMHz {
-            print(String(format: "E-core          : %.2f GHz", mhz / 1000))
+            print(String(format: L("E-cores         : %.2f GHz"), mhz / 1000))
         }
-        print("termico         : \(pressure.label)"
-            + (pressure.isThrottling ? "  <- prestazioni limitate" : ""))
+        print(L("thermal        : %@", pressure.label)
+            + (pressure.demandsAttention ? L("  <- performance limited") : ""))
         if let temps = ThermalSensors()?.read() {
-            print("temperatura SoC : \(ThermalSensors.Summary.format(temps.socCelsius))")
-            print("batteria / SSD  : "
-                + ThermalSensors.Summary.format(temps.batteryCelsius) + " / "
-                + ThermalSensors.Summary.format(temps.storageCelsius))
+            print(L("SoC temperature: %@", ThermalSensors.Summary.format(temps.socCelsius)))
+            print(L("battery / SSD  : %@ / %@",
+                    ThermalSensors.Summary.format(temps.batteryCelsius),
+                    ThermalSensors.Summary.format(temps.storageCelsius)))
         }
         if let watts = sample?.packageWattsText {
-            print("pacchetto       : \(watts)")
+            print(L("package        : %@", watts))
         }
         if let state {
-            print("low power mode  : \(state.lowPowerMode ? "attivo" : "spento")")
-            print("power nap       : \(state.powerNap ? "attivo" : "spento")")
-            print("spotlight       : \(state.spotlightIndexing ? "attivo" : "in pausa")")
-            print("time machine    : \(state.timeMachineAutomatic ? "automatico" : "in pausa")")
-            print("app nap         : \(AppNapControl.isDisabled ? "disattivato" : "attivo")")
-            print("helper          : \(state.helperVersion)")
+            print(L("low power mode : %@", state.lowPowerMode ? L("on") : L("off")))
+            print(L("power nap      : %@", state.powerNap ? L("on") : L("off")))
+            print(L("spotlight      : %@", state.spotlightIndexing ? L("on") : L("paused")))
+            print(L("time machine   : %@", state.timeMachineAutomatic ? L("automatic") : L("paused")))
+            print(L("app nap        : %@", AppNapControl.isDisabled ? L("disabled") : L("on")))
+            print(L("helper         : %@", state.helperVersion))
         }
     }
 
@@ -358,12 +358,12 @@ enum CommandLineMode {
         }
         switch outcome {
         case .none:
-            print("helper non raggiungibile: niente da ripristinare")
+            print(L("helper unreachable: nothing to restore"))
         case .some(let message) where !message.isEmpty:
             FileHandle.standardError.write(
                 Data("ripristino incompleto: \(message)\n".utf8))
         default:
-            print("impostazioni ripristinate")
+            print(L("settings restored"))
         }
 
         AppNapControl.setDisabled(false)
@@ -375,7 +375,7 @@ enum CommandLineMode {
         if daemon.status != .notRegistered {
             do {
                 try daemon.unregister()
-                print("registrazione SMAppService rimossa")
+                print(L("SMAppService registration removed"))
             } catch {
                 FileHandle.standardError.write(Data(
                     "SMAppService non deregistrato: \(error.localizedDescription)\n".utf8))
@@ -383,7 +383,7 @@ enum CommandLineMode {
         }
 
         if FileManager.default.fileExists(atPath: WattIdentifiers.systemDaemonPlistPath) {
-            print("l'helper e' registrato in launchd, per rimuoverlo:")
+            print(L("the helper is registered in launchd; to remove it:"))
             print("  sudo ./scripts/uninstall-helper.sh")
         }
     }

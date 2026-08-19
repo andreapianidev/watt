@@ -13,7 +13,7 @@ invece di lasciartelo scoprire aspettando.
 ![Licenza](https://img.shields.io/badge/licenza-MIT-3fb950)
 ![Dipendenze](https://img.shields.io/badge/dipendenze-nessuna-8957e5)
 
-[English](README.md) · [Installazione](#installazione) · [I numeri](#-i-numeri-misurati-su-un-macbook-air-m2)
+[English](README.md) · [andreapiani.com](https://andreapiani.com) · [Installazione](#installazione) · [I numeri](#-i-numeri-misurati-su-un-macbook-air-m2)
 
 </div>
 
@@ -74,7 +74,37 @@ open -a /Applications/Watt.app
 | **Sveglia** | come Amphetamine, con in più una modalità *finché dura la build* |
 | **Riga di comando** | `Watt --run massimo -- xcodebuild …` avvolge una build e ripristina da solo |
 
-Nessuna dipendenza esterna, nessun framework di terze parti, ~2.700 righe di Swift.
+Nessuna dipendenza esterna, nessun framework di terze parti, ~3.400 righe di
+Swift. L'interfaccia è **bilingue, italiano e inglese**, e segue da sola la
+lingua di macOS.
+
+### Ti dice cosa ti sta rallentando davvero
+
+La cosa più utile non è il selettore di profili — misurato, vale lo 0,1%. È la
+diagnosi:
+
+```console
+$ Watt --diagnose
+
+!! LA RAM NON BASTA: IL SISTEMA STA SCRIVENDO SU DISCO
+      5,69 GB di swap in uso, 1,90 GB compressi
+      → Chiudi ciò che non ti serve adesso — i più ingombranti sono
+        Unity (1,1 GB), WebKit (0,6 GB). «Libera memoria» non aiuta in
+        questo caso: purge scarta la cache dei file, non riporta in RAM
+        ciò che è già finito sullo swap.
+      base: una pagina letta dallo swap costa ordini di grandezza più di
+        una in RAM, e nessun profilo energetico la sposta di un microsecondo
+```
+
+È una esecuzione reale sulla macchina di sviluppo, con Unity aperto. Il Mac
+**non** era limitato dal calore né dalla CPU: stava swappando, e nessuno dei
+quattro profili tocca quel problema. Quattro volte su cinque il collo di
+bottiglia non è quello che immagini, ed è esattamente il motivo per cui un
+selettore da solo non basta.
+
+Ogni verdetto porta con sé la base su cui poggia. Un consiglio senza un numero
+dietro è un'opinione, e di opinioni sulle prestazioni ce ne sono già
+abbastanza.
 
 ---
 
@@ -359,9 +389,18 @@ più un'interfaccia per riattivarlo.
 
 ---
 
-## Licenza
+## Licenza e attribuzione
 
-MIT — vedi [LICENSE](LICENSE).
+Rilasciato con **licenza MIT** — vedi [LICENSE](LICENSE). GitHub riconosce il
+repository come MIT, quindi valgono i termini standard: usalo, modificalo,
+distribuiscilo anche commercialmente, senza obblighi oltre a conservare la nota
+di copyright e il testo della licenza nelle copie o nelle porzioni sostanziali.
+
+Se ci costruisci sopra qualcosa, un rimando a
+[github.com/andreapianidev/watt](https://github.com/andreapianidev/watt) è
+gradito ma non richiesto.
+
+Di [Andrea Piani](https://andreapiani.com).
 
 <div align="center">
 <sub>

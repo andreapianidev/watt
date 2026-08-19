@@ -13,7 +13,7 @@ instead of letting you find out by waiting.
 ![License](https://img.shields.io/badge/license-MIT-3fb950)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-8957e5)
 
-[Italiano](README.it.md) · [Installation](#installation) · [Benchmarks](#-benchmarks-measured-on-a-macbook-air-m2) · [How it reads data](#-how-it-reads-data)
+[Italiano](README.it.md) · [andreapiani.com](https://andreapiani.com) · [Installation](#installation) · [Benchmarks](#-benchmarks-measured-on-a-macbook-air-m2) · [How it reads data](#-how-it-reads-data)
 
 </div>
 
@@ -67,6 +67,7 @@ below is measured, including the one that says a profile does nothing.
 | Keep awake | ✅ | — | — | ✅ |
 | **While-a-build-runs keep awake** | ✅ | — | — | — |
 | **Scriptable CLI** | ✅ | — | — | ✅ |
+| Bilingual (EN / IT) | ✅ | — | — | — |
 | Fan control | n/a | ✅ | — | — |
 | Price | free, MIT | paid | free | paid |
 
@@ -105,7 +106,35 @@ open -a /Applications/Watt.app
 | **Keep awake** | Amphetamine-style, plus a *while a build is running* mode |
 | **CLI** | `Watt --run maximum -- xcodebuild …` wraps a build and restores the previous profile itself |
 
-No external dependencies, no third-party frameworks, ~2,700 lines of Swift.
+No external dependencies, no third-party frameworks, ~3,400 lines of Swift.
+The interface is **bilingual, English and Italian**, following your macOS
+language automatically.
+
+### It tells you what is actually slowing you down
+
+The most useful thing here is not the profile switcher — measured, that is
+worth 0.1%. It is the diagnosis:
+
+```console
+$ Watt --diagnose
+
+!! NOT ENOUGH RAM: THE SYSTEM IS WRITING TO DISK
+      5.69 GB of swap in use, 1.90 GB compressed
+      → Close what you do not need right now — the largest are
+        Unity (1.1 GB), WebKit (0.6 GB). "Free memory" will not help
+        here: purge discards the file cache, it does not bring back
+        what has already been swapped out.
+      basis: reading a page from swap costs orders of magnitude more
+        than from RAM, and no power profile moves it by a microsecond
+```
+
+That was a real run on the development machine, with Unity open. The Mac was
+**not** thermally limited and **not** CPU-starved — it was swapping, and none
+of the four profiles touches that. Four times out of five the bottleneck is
+not the one you assume, which is exactly why a selector alone is not enough.
+
+Every verdict carries the basis it rests on. Advice without a number behind it
+is an opinion, and there are enough opinions about performance already.
 
 ---
 
@@ -383,9 +412,18 @@ interface left to turn it back on.
 
 ---
 
-## License
+## License and attribution
 
-MIT — see [LICENSE](LICENSE).
+Released under the **MIT License** — see [LICENSE](LICENSE). GitHub reports
+this repository as MIT, so the terms are the standard ones: use it, change it,
+ship it commercially, no obligations beyond keeping the copyright notice and
+the licence text in copies or substantial portions.
+
+If you build on it, a link back to
+[github.com/andreapianidev/watt](https://github.com/andreapianidev/watt) is
+appreciated but not required.
+
+Made by [Andrea Piani](https://andreapiani.com).
 
 <div align="center">
 <sub>

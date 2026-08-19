@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import WattKit
 
 /// Lettura della memoria di sistema.
 ///

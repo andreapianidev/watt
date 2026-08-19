@@ -10,6 +10,15 @@
     <key>CFBundleShortVersionString</key><string>1.0.0</string>
     <key>CFBundleVersion</key>           <string>1</string>
     <key>LSMinimumSystemVersion</key>    <string>14.0</string>
+    <!-- Inglese come lingua base, italiano come traduzione. Senza questa
+         dichiarazione macOS non offre l'app in italiano nemmeno con le
+         .lproj presenti. -->
+    <key>CFBundleDevelopmentRegion</key>  <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>it</string>
+    </array>
     <!-- Solo barra dei menu: nessuna icona nel Dock. -->
     <key>LSUIElement</key>               <true/>
     <key>NSHumanReadableCopyright</key>

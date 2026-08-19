@@ -27,11 +27,11 @@ public final class ThermalSensors {
 
         public var label: String {
             switch self {
-            case .die:     return "SoC"
-            case .power:   return "Alimentazione"
-            case .storage: return "Archiviazione"
-            case .battery: return "Batteria"
-            case .other:   return "Altro"
+            case .die:     return L("SoC")
+            case .power:   return L("Power")
+            case .storage: return L("Storage")
+            case .battery: return L("Battery")
+            case .other:   return L("Other")
             }
         }
 

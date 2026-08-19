@@ -19,12 +19,12 @@ public enum ThermalPressure: String, Codable, Sendable {
 
     public var label: String {
         switch self {
-        case .nominal:  return "Nominale"
-        case .moderate: return "Moderata"
-        case .heavy:    return "Pesante"
-        case .trapping: return "Critica"
-        case .sleeping: return "Sospensione forzata"
-        case .unknown:  return "Sconosciuta"
+        case .nominal:  return L("Nominal")
+        case .moderate: return L("Moderate")
+        case .heavy:    return L("Heavy")
+        case .trapping: return L("Critical")
+        case .sleeping: return L("Forced sleep")
+        case .unknown:  return L("Unknown")
         }
     }
 

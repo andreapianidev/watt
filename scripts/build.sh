@@ -98,6 +98,13 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Library/LaunchDaemons"
 
 cp "$ROOT/Resources/App-Info.plist" "$APP/Contents/Info.plist"
+
+# Le traduzioni vanno nelle Resources del bundle, non dentro il package: il
+# lookup passa da Bundle.main anche quando la chiamata parte da WattKit.
+mkdir -p "$APP/Contents/Resources"
+for lproj in "$ROOT"/Resources/*.lproj; do
+    [[ -d "$lproj" ]] && cp -R "$lproj" "$APP/Contents/Resources/"
+done
 cp "$ROOT/Resources/dev.andreapiani.watt.helper.plist" \
    "$APP/Contents/Library/LaunchDaemons/"
 cp "$BIN/WattApp"    "$APP/Contents/MacOS/Watt"

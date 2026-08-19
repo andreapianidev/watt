@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import WattKit
 
 /// Avvisa quando il SoC supera una soglia.
 ///
@@ -50,13 +51,13 @@ final class TemperatureAlert {
     private func deliver(socCelsius: Double, throttling: Bool) {
         guard authorized else { return }
         let content = UNMutableNotificationContent()
-        content.title = String(format: "SoC a %.0f °C", socCelsius)
+        content.title = L("SoC at %.0f °C", socCelsius)
         content.body = throttling
-            ? "Il sistema sta limitando le prestazioni per il calore. "
-            + "Su un Mac senza ventola non c'è modo di evitarlo: puoi solo "
-            + "ridurre il carico o dargli tregua."
-            : "Temperatura sopra la soglia impostata, ma le prestazioni non "
-            + "risultano ancora limitate."
+            ? L("The system is limiting performance because of heat. On a "
+              + "fanless Mac there is no way around it: you can only reduce "
+              + "the load or give it a break.")
+            : L("Temperature is above your threshold, but performance is not "
+              + "being limited yet.")
         content.sound = .default
 
         UNUserNotificationCenter.current().add(

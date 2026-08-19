@@ -18,10 +18,10 @@ public enum PowerProfile: String, Codable, CaseIterable, Sendable {
 
     public var title: String {
         switch self {
-        case .risparmio:   return "Risparmio"
-        case .automatico:  return "Automatico"
-        case .prestazioni: return "Prestazioni"
-        case .massimo:     return "Massimo"
+        case .risparmio:   return L("Low Power")
+        case .automatico:  return L("Automatic")
+        case .prestazioni: return L("High")
+        case .massimo:     return L("Maximum")
         }
     }
 
@@ -38,20 +38,20 @@ public enum PowerProfile: String, Codable, CaseIterable, Sendable {
     public var explanation: String {
         switch self {
         case .risparmio:
-            return "Low Power Mode attivo, Power Nap spento, schermo e disco "
-                 + "si spengono prima. Riduce il clock in modo reale."
+            return L("Low Power Mode on, Power Nap off, display and disk sleep "
+                   + "sooner. This one genuinely lowers the clock.")
         case .automatico:
-            return "Ripristina esattamente le impostazioni di sistema "
-                 + "registrate alla prima esecuzione. Nessuna modifica attiva."
+            return L("Restores the exact system settings recorded on first "
+                   + "run. Nothing is actively changed.")
         case .prestazioni:
-            return "Low Power Mode spento, indicizzazione Spotlight e backup "
-                 + "Time Machine in pausa, App Nap disattivato, sospensione "
-                 + "inibita. Libera CPU e I/O, non alza il clock."
+            return L("Stops scheduled background work: Spotlight indexing "
+                   + "and Time Machine paused, App Nap off, sleep prevented. "
+                   + "Nothing already running is touched.")
         case .massimo:
-            return "Come Prestazioni, piu' i daemon di sistema noti confinati "
-                 + "sugli E-core, che sotto pressione termica restano a piena "
-                 + "velocita' mentre i P-core no. Il limite finale resta "
-                 + "termico: l'Air non ha ventola."
+            return L("Everything in High, and also acts on what is already "
+                   + "running: known daemons confined to E-cores, deferrable "
+                   + "services frozen, inactive memory freed. Takes about ten "
+                   + "seconds longer to apply.")
         }
     }
 
