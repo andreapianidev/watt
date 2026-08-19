@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import WattKit
 
@@ -22,6 +23,8 @@ final class PowerController {
     private(set) var history = TemperatureHistory()
     private(set) var throttleReport: ThrottleReport?
     private(set) var suspendedServices: [String] = []
+    private(set) var findings: [Diagnosis.Finding] = []
+    private(set) var processes: [ProcessSnapshot.Entry] = []
 
     /// Sveglia controllata dall'utente, indipendente dal profilo: un Mac
     /// tenuto sveglio durante una build non ha niente a che vedere con la
@@ -141,6 +144,36 @@ final class PowerController {
         notify()
     }
 
+    /// Rianalizza cosa sta limitando la macchina.
+    ///
+    /// Richiede la tabella dei processi all'helper, quindi non gira nel ciclo
+    /// di aggiornamento continuo: si aggiorna quando apri il menu, che e'
+    /// quando la risposta serve.
+    func refreshDiagnosis() {
+        helper.processSnapshot { [weak self] entries in
+            guard let self else { return }
+            self.processes = entries
+            let foreground = Set(NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular }
+                .map(\.processIdentifier))
+            self.findings = Diagnosis.analyze(
+                sample: self.lastSample, memory: self.memory,
+                state: self.lastState, processes: entries,
+                foregroundPIDs: foreground)
+            self.notify()
+        }
+    }
+
+    /// Esegue il rimedio proposto da un verdetto.
+    func apply(_ remedy: Diagnosis.Remedy) {
+        switch remedy {
+        case .switchProfile(let profile): apply(profile)
+        case .freezeServices:             toggleServiceSuspension()
+        case .throttleBackground:         throttleNow()
+        case .none:                       break
+        }
+    }
+
     /// Lettura completa di tutti i sensori, per l'elenco dettagliato.
     func refreshAllSensors() {
         guard let full = sensors?.read() else { return }
@@ -172,7 +205,7 @@ final class PowerController {
         // Solo i sensori sul die: bastano per la barra dei menu e per il
         // grafico, e costano un terzo della lettura completa. L'elenco
         // integrale si legge quando qualcuno lo sta guardando.
-        temperatures = sensors?.readDie()
+        temperatures = sensors?.readEssential()
 
         if let summary = temperatures, !summary.all.isEmpty {
             // La media è su tutti i sensori, la massima è il punto più caldo:

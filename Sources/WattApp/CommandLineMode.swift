@@ -99,6 +99,10 @@ enum CommandLineMode {
             print("priorità normale ripristinata")
             return true
 
+        case "--diagnose":
+            diagnose()
+            return true
+
         case "--temps":
             guard let summary = ThermalSensors()?.read(), !summary.all.isEmpty else {
                 fail("Sensori termici non leggibili su questo sistema.")
@@ -158,6 +162,7 @@ enum CommandLineMode {
           Watt --apply <profilo>   applica un profilo ed esce
           Watt --status            stato del sistema e consumi correnti
           Watt --profiles          elenca i profili e cosa fanno
+          Watt --diagnose          cosa sta limitando la macchina adesso
           Watt --temps             tutte le temperature dei sensori
           Watt --suspend           congela i servizi differibili (SIGSTOP)
           Watt --resume            li riattiva
@@ -272,6 +277,73 @@ enum CommandLineMode {
             print("app nap         : \(AppNapControl.isDisabled ? "disattivato" : "attivo")")
             print("helper          : \(state.helperVersion)")
         }
+    }
+
+    /// Analizza e stampa cosa sta limitando la macchina.
+    private static func diagnose() {
+        let sampler = IOReportSampler()
+        Thread.sleep(forTimeInterval: 0.3)
+        var sample = PowerSample()
+        if let reading = sampler?.sample() {
+            sample.pCoreMHz = reading.pCoreMHz
+            sample.pCoreCeilingMHz = reading.pCoreCeilingMHz
+            sample.eCoreMHz = reading.eCoreMHz
+        }
+        sample.thermalPressureRaw = ThermalPressure(
+            processInfoState: ProcessInfo.processInfo.thermalState).rawValue
+
+        let memory = MemoryReader.read()
+        let state: SystemState? = callHelper { proxy, done in
+            proxy.readSystemState { data in
+                done(data.flatMap { try? JSONDecoder().decode(SystemState.self, from: $0) })
+            }
+        }
+        let processes: [ProcessSnapshot.Entry] = callHelper(timeout: 30) { proxy, done in
+            proxy.processSnapshot { data in
+                done((data.flatMap {
+                    try? JSONDecoder().decode(ProcessSnapshot.self, from: $0)
+                })?.entries ?? [])
+            }
+        } ?? []
+
+        let foreground = Set(NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .map(\.processIdentifier))
+
+        let findings = Diagnosis.analyze(
+            sample: sample, memory: memory, state: state,
+            processes: processes, foregroundPIDs: foreground)
+
+        print("")
+        for finding in findings {
+            print(finding.severity.marker + finding.title.uppercased())
+            if !finding.measured.isEmpty { print("      \(finding.measured)") }
+            print("      → \(wrap(finding.advice))")
+            if let basis = finding.basis {
+                print("      base: \(wrap(basis))")
+            }
+            print("")
+        }
+        if processes.isEmpty {
+            print("nota: senza helper non si vedono i processi di altri utenti,")
+            print("      quindi la contesa e WindowServer restano invisibili.")
+        }
+    }
+
+    /// Manda a capo a 68 colonne allineando le righe successive.
+    private static func wrap(_ text: String, width: Int = 68) -> String {
+        var lines: [String] = []
+        var current = ""
+        for word in text.split(separator: " ") {
+            if current.count + word.count + 1 > width {
+                lines.append(current)
+                current = String(word)
+            } else {
+                current += current.isEmpty ? String(word) : " " + word
+            }
+        }
+        if !current.isEmpty { lines.append(current) }
+        return lines.joined(separator: "\n            ")
     }
 
     /// Riporta il sistema alla baseline e rimuove ogni registrazione.

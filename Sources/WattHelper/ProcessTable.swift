@@ -94,6 +94,37 @@ enum ProcessTable {
         return (name, Int32(bsd.pbi_ppid), memory)
     }
 
+    /// Nome leggibile di un processo.
+    ///
+    /// `pbi_comm` si ferma a sedici caratteri, e a quel punto "Code Helper
+    /// (Renderer)" diventa "Code Helper (Re" e un binario versionato diventa
+    /// "2.1.235": inutile da mostrare a chi deve decidere cosa chiudere. Il
+    /// percorso completo dell'eseguibile da' il nome vero, e si risolve solo
+    /// per i processi che vengono effettivamente riportati.
+    static func displayName(for pid: Int32, fallback: String) -> String {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else {
+            return fallback
+        }
+        let path = String(cString: buffer)
+        guard !path.isEmpty else { return fallback }
+
+        // Per un'app in bundle il nome utile e' quello dell'app, non
+        // dell'eseguibile annidato in Contents/MacOS.
+        if let range = path.range(of: ".app/Contents/MacOS/") {
+            let bundle = String(path[path.startIndex..<range.lowerBound])
+            return (bundle as NSString).lastPathComponent
+        }
+
+        let basename = (path as NSString).lastPathComponent
+        // Alcuni programmi installano l'eseguibile con il numero di versione
+        // come nome del file: il percorso reale finisce in "2.1.235", che a
+        // chi deve decidere cosa chiudere non dice nulla. In quel caso il
+        // nome breve del processo e' piu' informativo del suo percorso.
+        let hasLetters = basename.contains { $0.isLetter }
+        return hasLetters ? basename : fallback
+    }
+
     /// Catena degli antenati di un processo, fino a `launchd`.
     ///
     /// Serve a non rallentare mai la shell o il terminale da cui il comando è

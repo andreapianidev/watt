@@ -98,6 +98,33 @@ final class HelperService: NSObject, WattHelperProtocol {
         queue.async { reply(SmartThrottle.restoreThrottled()) }
     }
 
+    func processSnapshot(reply: @escaping (Data?) -> Void) {
+        activity()
+        samplerQueue.async {
+            let table = ProcessTable.sample()
+            // Due classifiche unite: i piu' esosi di CPU e i piu' ingombranti
+            // di memoria. Filtrando solo per CPU, un processo che occupa
+            // gigabyte stando fermo — cioe' proprio quello da chiudere quando
+            // il Mac swappa — non comparirebbe mai.
+            let byCPU = table.filter { $0.cpuPercent >= 1 }
+                .sorted { $0.cpuPercent > $1.cpuPercent }.prefix(25)
+            let byMemory = table.sorted { $0.memoryMB > $1.memoryMB }.prefix(15)
+
+            var seen = Set<Int32>()
+            let entries = (byCPU + byMemory)
+                .filter { seen.insert($0.pid).inserted }
+                .map { entry in
+                    ProcessSnapshot.Entry(
+                        name: ProcessTable.displayName(for: entry.pid,
+                                                       fallback: entry.name),
+                        pid: entry.pid,
+                        cpuPercent: entry.cpuPercent,
+                        memoryMB: entry.memoryMB)
+                }
+            reply(try? JSONEncoder().encode(ProcessSnapshot(entries: entries)))
+        }
+    }
+
     func suspendServices(reply: @escaping (Data?) -> Void) {
         activity()
         queue.async {

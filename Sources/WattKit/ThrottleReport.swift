@@ -132,3 +132,24 @@ public struct SuspensionReport: Codable, Sendable {
         self.expiresAt = expiresAt
     }
 }
+
+
+/// Fotografia dei processi piu' esosi, con CPU istantanea.
+public struct ProcessSnapshot: Codable, Sendable {
+    public struct Entry: Codable, Sendable {
+        public var name: String
+        public var pid: Int32
+        public var cpuPercent: Double
+        public var memoryMB: Double
+
+        public init(name: String, pid: Int32, cpuPercent: Double, memoryMB: Double) {
+            self.name = name
+            self.pid = pid
+            self.cpuPercent = cpuPercent
+            self.memoryMB = memoryMB
+        }
+    }
+
+    public var entries: [Entry]
+    public init(entries: [Entry] = []) { self.entries = entries }
+}

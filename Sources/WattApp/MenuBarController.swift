@@ -31,6 +31,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var thresholdItems: [NSMenuItem] = []
     private var cadenceItems: [NSMenuItem] = []
     private var suspendItem = NSMenuItem()
+    private var diagnosisRoot = NSMenuItem()
     private var alertsToggle = NSMenuItem()
     private let chartView = TemperatureChartView()
     private let chartItem = NSMenuItem()
@@ -62,6 +63,94 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // MARK: - Costruzione
 
+    /// Riga di diagnosi in cima al menu, con il rimedio a portata di clic.
+    ///
+    /// Sta prima dei profili perche' e' l'informazione che serve per primo:
+    /// quale delle cause possibili ti sta rallentando adesso. Quattro volte su
+    /// cinque non e' quella che immagini, e nessun profilo la risolve.
+    private func renderDiagnosis() {
+        guard let submenu = diagnosisRoot.submenu else { return }
+        submenu.autoenablesItems = false
+        submenu.removeAllItems()
+
+        let findings = controller.findings
+        guard let first = findings.first else {
+            diagnosisRoot.title = "Diagnosi in corso…"
+            diagnosisRoot.image = NSImage(systemSymbolName: "stethoscope",
+                                          accessibilityDescription: nil)
+            return
+        }
+
+        diagnosisRoot.title = first.title
+        diagnosisRoot.image = NSImage(systemSymbolName: first.severity.symbolName,
+                                      accessibilityDescription: nil)
+
+        for (index, finding) in findings.enumerated() {
+            if index > 0 { submenu.addItem(.separator()) }
+
+            let header = NSMenuItem(title: finding.title, action: nil,
+                                    keyEquivalent: "")
+            header.image = NSImage(systemSymbolName: finding.severity.symbolName,
+                                   accessibilityDescription: nil)
+            submenu.addItem(header)
+
+            for line in [finding.measured, finding.advice].filter({ !$0.isEmpty }) {
+                for chunk in Self.wrapped(line) {
+                    let item = NSMenuItem(title: "    " + chunk, action: nil,
+                                          keyEquivalent: "")
+                    item.attributedTitle = NSAttributedString(
+                        string: "    " + chunk,
+                        attributes: [
+                            .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
+                            .foregroundColor: NSColor.secondaryLabelColor,
+                        ])
+                    submenu.addItem(item)
+                }
+            }
+
+            if case .none = finding.remedy {} else {
+                let action = NSMenuItem(title: "    " + Self.remedyLabel(finding.remedy),
+                                        action: #selector(applyRemedy(_:)),
+                                        keyEquivalent: "")
+                action.target = self
+                action.representedObject = index
+                submenu.addItem(action)
+            }
+        }
+    }
+
+    private static func remedyLabel(_ remedy: Diagnosis.Remedy) -> String {
+        switch remedy {
+        case .switchProfile(let profile): return "Passa a \(profile.title)"
+        case .freezeServices:             return "Congela i servizi differibili"
+        case .throttleBackground:         return "Rallenta i processi in background"
+        case .none:                       return ""
+        }
+    }
+
+    /// Manda a capo a 62 caratteri: una voce di menu troppo lunga viene
+    /// troncata da AppKit proprio dove sta l'informazione utile.
+    private static func wrapped(_ text: String, width: Int = 62) -> [String] {
+        var lines: [String] = []
+        var current = ""
+        for word in text.split(separator: " ") {
+            if current.count + word.count + 1 > width {
+                lines.append(current)
+                current = String(word)
+            } else {
+                current += current.isEmpty ? String(word) : " " + word
+            }
+        }
+        if !current.isEmpty { lines.append(current) }
+        return lines
+    }
+
+    @objc private func applyRemedy(_ sender: NSMenuItem) {
+        guard let index = sender.representedObject as? Int,
+              index < controller.findings.count else { return }
+        controller.apply(controller.findings[index].remedy)
+    }
+
     private func buildMenu() {
         // AppKit disabilita da se' le voci senza azione, e una voce
         // disabilitata viene disegnata semitrasparente: era il motivo per cui
@@ -69,6 +158,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // l'abilitazione automatica le righe informative restano a piena
         // opacita' pur non essendo cliccabili.
         menu.autoenablesItems = false
+
+        diagnosisRoot = NSMenuItem(title: "Diagnosi in corso…", action: nil,
+                                   keyEquivalent: "")
+        diagnosisRoot.submenu = NSMenu()
+        menu.addItem(diagnosisRoot)
+        menu.addItem(.separator())
 
         for profile in PowerProfile.allCases {
             let item = NSMenuItem(title: profile.title,
@@ -249,6 +344,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: - Rendering
 
     private func render() {
+        renderDiagnosis()
         renderStatusItem()
         renderProfileChecks()
         renderStateRows()
@@ -287,7 +383,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Quando il sistema limita le prestazioni l'elemento cambia colore e
         // simbolo. Un'icona che resta identica mentre perdi il 60% del clock
         // e' inutile: il senso di questa app e' che quel momento si veda.
-        let throttling = pressure.isThrottling
+        let throttling = pressure.demandsAttention
         let symbol = throttling
             ? "exclamationmark.triangle.fill"
             : controller.profile.symbolName
@@ -340,7 +436,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         var lines = ["Watt - profilo \(controller.profile.title)"]
         if let summary = sample?.pCoreSummary { lines.append("P-core: \(summary)") }
         lines.append("Pressione termica: \(pressure.label)")
-        if pressure.isThrottling {
+        if pressure.demandsAttention {
             lines.append("Le prestazioni sono limitate dal calore.")
         }
         lines.append("Sveglia: " + keepAwakeSummary())
@@ -361,8 +457,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let temps = controller.temperatures
 
         var rows: [(String, String)] = []
-        if pressure.isThrottling, let fraction = sample?.pCoreCeilingFraction {
-            rows.append(("PRESTAZIONI LIMITATE DAL CALORE",
+        if pressure.demandsAttention, let fraction = sample?.pCoreCeilingFraction {
+            rows.append(("Limitato dal calore",
                          String(format: "%.0f%% del massimo", fraction * 100)))
         } else {
             rows.append(("Termico", pressure.label))
@@ -516,7 +612,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// le colonne restano allineate a qualunque larghezza.
     private static func row(label: String, value: String) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: 260)]
+        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: 300)]
 
         let attributed = NSMutableAttributedString(
             string: label + "\t",
@@ -649,6 +745,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         isMenuOpen = true
         controller.adoptExternalProfileChange()
         controller.refreshAllSensors()
+        controller.refreshDiagnosis()
         poller.setForeground(true)
         controller.refreshState()
         // I watt costano un powermetrics: si chiedono solo mentre qualcuno

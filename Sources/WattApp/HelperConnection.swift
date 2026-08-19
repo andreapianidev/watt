@@ -187,6 +187,19 @@ final class HelperConnection {
         }
     }
 
+    func processSnapshot(
+        completion: @escaping @MainActor @Sendable ([ProcessSnapshot.Entry]) -> Void
+    ) {
+        callHelper(onFailure: { _ in completion([]) }) { proxy in
+            proxy.processSnapshot { @Sendable data in
+                let snapshot = data.flatMap {
+                    try? JSONDecoder().decode(ProcessSnapshot.self, from: $0)
+                }
+                Task { @MainActor in completion(snapshot?.entries ?? []) }
+            }
+        }
+    }
+
     func suspendServices(
         completion: @escaping @MainActor @Sendable (SuspensionReport?) -> Void
     ) {

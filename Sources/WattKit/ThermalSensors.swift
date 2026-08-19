@@ -109,7 +109,7 @@ public final class ThermalSensors {
     /// Nome di ciascun servizio, appaiato per indice a `services`.
     private let names: [String]
     private let categories: [Category]
-    /// Indici dei soli sensori sul die.
+    /// Indici dei sensori che la barra dei menu mostra sempre.
     ///
     /// La barra dei menu ha bisogno solo di questi. Leggere tutti e trentanove
     /// i sensori costa circa 52 ms contro i 17 del sottoinsieme, e a un
@@ -168,8 +168,13 @@ public final class ThermalSensors {
         }
         self.names = resolved
         self.categories = resolved.map(Category.infer(from:))
+        // Die, batteria e archiviazione: sono le tre righe che il menu mostra
+        // sempre. Restano esclusi i sensori di alimentazione e calibrazione,
+        // che sono la meta' del totale e che nessuno guarda se non aprendo
+        // l'elenco completo.
         self.dieIndices = categories.enumerated()
-            .filter { $0.element == .die }.map(\.offset)
+            .filter { [.die, .battery, .storage].contains($0.element) }
+            .map(\.offset)
     }
 
     // MARK: - Lettura
@@ -179,9 +184,12 @@ public final class ThermalSensors {
         summary(from: readValues(at: Array(services.indices)))
     }
 
-    /// Legge i soli sensori sul die: e' quanto serve alla barra dei menu, a
-    /// circa un terzo del costo.
-    public func readDie() -> Summary {
+    /// Legge i soli sensori mostrati di continuo.
+    ///
+    /// Leggere solo quelli sul die faceva sparire batteria e SSD dal menu: la
+    /// lettura veloce sovrascriveva quella completa un secondo dopo averla
+    /// fatta, e le due righe tornavano a "n/d" da sole.
+    public func readEssential() -> Summary {
         summary(from: readValues(at: dieIndices))
     }
 

@@ -28,11 +28,29 @@ public enum ThermalPressure: String, Codable, Sendable {
         }
     }
 
-    /// `true` quando il sistema sta attivamente limitando le prestazioni.
+    /// `true` quando il sistema segnala una qualsiasi pressione termica.
     public var isThrottling: Bool {
         switch self {
         case .nominal, .unknown: return false
         case .moderate, .heavy, .trapping, .sleeping: return true
+        }
+    }
+
+    /// `true` solo quando la limitazione e' abbastanza grave da valere un
+    /// allarme.
+    ///
+    /// `ProcessInfo` riporta "fair" gia' sotto un carico ordinario, e in quel
+    /// momento i core girano ancora quasi al massimo. Accendere l'allarme li'
+    /// significherebbe accenderlo quasi sempre, e un avviso sempre acceso non
+    /// e' un avviso.
+    ///
+    /// Serve soprattutto a non confondere l'inattivita' con la limitazione:
+    /// a riposo i P-core scendono sotto il gigahertz perche' non c'e' lavoro,
+    /// non perche' il sistema li stia frenando.
+    public var demandsAttention: Bool {
+        switch self {
+        case .nominal, .unknown, .moderate: return false
+        case .heavy, .trapping, .sleeping:  return true
         }
     }
 

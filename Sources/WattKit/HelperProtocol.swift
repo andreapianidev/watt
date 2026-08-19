@@ -34,6 +34,15 @@ import Foundation
     func throttleHeavyBackground(protectedPIDs: [NSNumber],
                                  reply: @escaping (Data?) -> Void)
 
+    /// Processi ordinati per consumo di CPU istantaneo.
+    ///
+    /// Passa dall'helper perche' `proc_pid_rusage` sui processi di altri
+    /// utenti richiede privilegi: senza, `WindowServer` — che e' spesso il
+    /// vero responsabile — resterebbe invisibile.
+    ///
+    /// Payload della risposta: `ProcessSnapshot` in JSON.
+    func processSnapshot(reply: @escaping (Data?) -> Void)
+
     /// Congela con SIGSTOP i servizi di sistema differibili.
     ///
     /// Payload della risposta: `SuspensionReport` in JSON.
