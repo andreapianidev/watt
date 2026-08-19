@@ -35,15 +35,29 @@ final class KeepAwake {
         }
     }
 
-    /// Processi la cui presenza indica che c'e' un lavoro da non
-    /// interrompere. Volutamente orientata allo sviluppo: e' il caso in cui
-    /// il Mac si addormenta proprio mentre stava facendo la cosa piu' utile.
+    /// Processi la cui presenza indica una build in corso.
+    ///
+    /// Deliberatamente ristretta a strumenti **inequivocabili**. La versione
+    /// precedente includeva `python3`, `node`, `go`, `java`, `make`: nomi
+    /// generici che su una macchina da sviluppo sono quasi sempre vivi per
+    /// qualche altra ragione, per cui il Mac non si sarebbe addormentato
+    /// mai. Per una funzione il cui scopo e' lasciarlo dormire quando non
+    /// serve, era il difetto peggiore possibile.
+    ///
+    /// Meglio un falso negativo, che costa una sospensione durante una build
+    /// rara, di un falso positivo che rende la modalita' inutile sempre.
     static let buildProcesses = [
-        "xcodebuild", "swift-frontend", "swiftc", "clang", "ld",
-        "ninja", "make", "cmake", "gradle", "java",
-        "node", "esbuild", "vite", "webpack", "tsc",
-        "cargo", "rustc", "go", "docker", "qemu-system-aarch64",
-        "ffmpeg", "python3", "pytest",
+        // Compilatori e linker invocati solo da una build vera.
+        "xcodebuild", "swift-frontend", "swift-driver", "swiftc",
+        "ld-classic", "lto-prelink",
+        // Sistemi di build.
+        "ninja", "gradle-launcher", "xcodebuild-worker",
+        // Toolchain con nomi propri.
+        "cargo", "rustc", "tsc", "esbuild", "webpack",
+        // Contenitori e virtualizzazione.
+        "qemu-system-aarch64", "com.docker.build",
+        // Elaborazione multimediale lunga.
+        "ffmpeg", "HandBrakeCLI", "compressor",
     ]
 
     private var systemAssertion: IOPMAssertionID = IOPMAssertionID(0)

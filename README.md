@@ -207,6 +207,46 @@ qualcosa che root non lo richiede sarebbe solo superficie d'attacco in più.
 Da *Mostra in barra* si sceglie se accanto all'icona compare la frequenza,
 la temperatura o entrambe.
 
+### Grafico e avvisi
+
+Il menu disegna gli ultimi venti minuti: **massima** in arancione (il sensore
+più caldo) e **media** in azzurro (tutti i sensori). Insieme dicono se sta
+scaldando l'intero SoC o un solo cluster. La linea rossa tratteggiata è la
+soglia di allerta.
+
+Gli avvisi arrivano come notifiche di sistema, con soglia scegliibile fra 80,
+85, 90 e 95 °C. Due accorgimenti perché siano utili invece che molesti: una
+pausa di dieci minuti fra un avviso e il successivo, e un'isteresi di quattro
+gradi prima di riarmarsi — senza, oscillare attorno alla soglia produrrebbe
+una raffica di notifiche, ed è proprio quello che fa un Air sotto carico.
+
+## Rallentamento mirato dei processi in background
+
+Massimo non si limita a una lista fissa: guarda cosa sta consumando **adesso**
+e sceglie. La regola di sicurezza è una sola, e non ammette eccezioni:
+
+> non si tocca mai nulla che abbia un'interfaccia.
+
+L'app raccoglie i PID di tutte le applicazioni visibili e li passa
+all'helper, che da solo non potrebbe distinguerle — dal suo punto di vista
+Xcode che compila e un daemon che indicizza sono entrambi processi che
+consumano. Sono protetti anche i figli di quelle applicazioni, le shell e le
+sessioni interattive, e la catena degli antenati di chi ha fatto la
+richiesta: rallentare il terminale da cui hai lanciato il comando sarebbe il
+primo effetto che noti e l'ultimo di cui sospetteresti.
+
+Il consumo si misura via `libproc`, campionando il tempo CPU accumulato in
+due istanti. Il `%CPU` di `ps` è invece la media sull'intera vita del
+processo: una shell che ha macinato per un'ora e ora è ferma continua a
+dichiarare il 60%, e sceglierebbe di rallentare proprio quella. È un errore
+che questa app ha commesso davvero, prima di essere corretta.
+
+Il sottomenu elenca cosa è stato rallentato, con consumo e memoria di
+ciascuno. Un'app che con privilegi di root cambia la priorità dei processi
+deve dire quali: altrimenti chiede fiducia senza offrire il modo di
+verificarla. `Watt --throttle` e `Watt --unthrottle` fanno lo stesso da
+terminale.
+
 ## Sveglia (come Amphetamine)
 
 Il secondo mestiere dell'app. Impedisce al Mac di addormentarsi, con le
@@ -235,6 +275,10 @@ L'app **è** anche la CLI, ed è pensata per gli script di build:
 ```bash
 Watt --status                  # frequenze, temperature, termico, stato
 Watt --temps                   # tutti i sensori, dal più caldo
+Watt --throttle                # rallenta i background che consumano
+Watt --unthrottle              # ne ripristina la priorità normale
+Watt --login on                # apertura automatica all'accesso
+Watt --uninstall               # ripristina le impostazioni e deregistra
 Watt --apply massimo           # applica un profilo
 Watt --purge                   # libera la memoria inattiva
 Watt --profiles                # cosa fa ciascun profilo
@@ -251,12 +295,17 @@ l'indicizzazione in pausa.
 
 ```bash
 ./scripts/thermal-curve.sh [campioni] [intervallo]   # misura il throttling
-./build/Watt.app/Contents/MacOS/watt-helper --parse campione.plist
+
+# Diagnostica dell'helper, utile per verificarlo su hardware o versioni di
+# macOS diverse. Non modificano nulla: leggono e stampano.
+watt-helper --parse campione.plist   # come interpreta un output powermetrics
+watt-helper --sample                 # campiona come se rispondesse via XPC
 ```
 
-Il secondo mostra come Watt interpreta un output di `powermetrics` già
-catturato: utile per verificare il parser su hardware o versioni di macOS
-diverse, senza installare nulla e senza root.
+Se l'helper si comporta diversamente una volta installato come demone,
+`WATT_DEBUG=1 sudo ./scripts/install-helper.sh` gli fa scrivere lo stderr in
+`/var/log/watt-helper.log`. È spento di default perché nessuno ruota quel
+file.
 
 ## Disinstallare
 

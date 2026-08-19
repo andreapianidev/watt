@@ -28,6 +28,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var sensorsRoot = NSMenuItem()
     private var isMenuOpen = false
     private var barDisplayItems: [NSMenuItem] = []
+    private var thresholdItems: [NSMenuItem] = []
+    private var alertsToggle = NSMenuItem()
+    private let chartView = TemperatureChartView()
+    private let chartItem = NSMenuItem()
+    private var throttleRoot = NSMenuItem()
 
     /// Le voci della sveglia, nell'ordine in cui compaiono.
     private static let awakeModes: [KeepAwake.Mode] = [
@@ -56,6 +61,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: - Costruzione
 
     private func buildMenu() {
+        // AppKit disabilita da se' le voci senza azione, e una voce
+        // disabilitata viene disegnata semitrasparente: era il motivo per cui
+        // temperature e frequenze risultavano illeggibili. Spegnendo
+        // l'abilitazione automatica le righe informative restano a piena
+        // opacita' pur non essendo cliccabili.
+        menu.autoenablesItems = false
+
         for profile in PowerProfile.allCases {
             let item = NSMenuItem(title: profile.title,
                                   action: #selector(selectProfile(_:)),
@@ -75,10 +87,38 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // dal sistema e non il profilo selezionato.
         for _ in 0..<6 {
             let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            item.isEnabled = false
             menu.addItem(item)
             stateItems.append(item)
         }
+
+        menu.addItem(.separator())
+        chartView.frame = NSRect(x: 0, y: 0, width: 280, height: 108)
+        chartItem.view = chartView
+        menu.addItem(chartItem)
+
+        let alertsRoot = NSMenuItem(title: "Avvisi temperatura", action: nil,
+                                    keyEquivalent: "")
+        let alertsMenu = NSMenu()
+        alertsMenu.autoenablesItems = false
+        alertsToggle = NSMenuItem(title: "Avvisami quando scotta",
+                                  action: #selector(toggleAlerts),
+                                  keyEquivalent: "")
+        alertsToggle.target = self
+        alertsMenu.addItem(alertsToggle)
+        alertsMenu.addItem(.separator())
+        for threshold in TemperatureAlert.thresholds {
+            let item = NSMenuItem(title: String(format: "oltre %.0f °C", threshold),
+                                  action: #selector(selectThreshold(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = threshold
+            alertsMenu.addItem(item)
+            thresholdItems.append(item)
+        }
+        alertsRoot.submenu = alertsMenu
+        alertsRoot.image = NSImage(systemSymbolName: "bell",
+                                   accessibilityDescription: nil)
+        menu.addItem(alertsRoot)
 
         sensorsRoot = NSMenuItem(title: "Tutti i sensori", action: nil, keyEquivalent: "")
         sensorsRoot.submenu = NSMenu()
@@ -103,6 +143,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         displayRoot.submenu = displayMenu
         menu.addItem(displayRoot)
+
+        throttleRoot = NSMenuItem(title: "Processi in background", action: nil,
+                                  keyEquivalent: "")
+        throttleRoot.image = NSImage(systemSymbolName: "gauge.with.dots.needle.33percent",
+                                     accessibilityDescription: nil)
+        throttleRoot.submenu = NSMenu()
+        menu.addItem(throttleRoot)
 
         let purge = NSMenuItem(title: "Libera memoria adesso",
                                action: #selector(purgeMemory),
@@ -174,6 +221,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         renderStateRows()
         renderKeepAwake()
         renderSensors()
+        renderThrottle()
+        chartView.history = controller.history
+        chartView.warningCelsius = Preferences.alertThreshold
+        alertsToggle.state = Preferences.alertsEnabled ? .on : .off
+        for item in thresholdItems {
+            item.state = (item.representedObject as? Double
+                          == Preferences.alertThreshold) ? .on : .off
+            item.isEnabled = Preferences.alertsEnabled
+        }
         for item in barDisplayItems {
             item.state = (item.representedObject as? String
                           == Preferences.barDisplay.rawValue) ? .on : .off
@@ -264,6 +320,48 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    /// Mostra cosa è stato rallentato e permette di farlo o disfarlo a mano.
+    ///
+    /// L'elenco è esplicito di proposito: un'app che con privilegi di root
+    /// cambia la priorità dei processi deve dire quali, altrimenti chiede
+    /// fiducia senza offrire il modo di verificarla.
+    private func renderThrottle() {
+        guard let submenu = throttleRoot.submenu else { return }
+        submenu.autoenablesItems = false
+        submenu.removeAllItems()
+
+        let report = controller.throttleReport
+        let count = report?.throttled.count ?? 0
+        throttleRoot.title = count > 0
+            ? String(format: "Processi rallentati: %d", count)
+            : "Processi in background"
+
+        let action = NSMenuItem(
+            title: count > 0 ? "Ripristina priorità normale"
+                             : "Rallenta i background che consumano",
+            action: count > 0 ? #selector(restoreThrottled)
+                              : #selector(throttleNow),
+            keyEquivalent: "")
+        action.target = self
+        submenu.addItem(action)
+
+        guard let report, !report.throttled.isEmpty else { return }
+        submenu.addItem(.separator())
+        let header = NSMenuItem(title: report.summary, action: nil,
+                                keyEquivalent: "")
+        submenu.addItem(header)
+        submenu.addItem(.separator())
+
+        for entry in report.throttled.prefix(20) {
+            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            item.attributedTitle = Self.row(
+                label: entry.name,
+                value: String(format: "%.0f%% · %.0f MB",
+                              entry.cpuPercent, entry.memoryMB))
+            submenu.addItem(item)
+        }
+    }
+
     /// Elenca ogni sensore, dal piu' caldo al piu' freddo.
     ///
     /// Si ricostruisce solo a menu aperto: un M2 Air espone una quarantina di
@@ -273,19 +371,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard menu.highlightedItem != nil || sensorsRoot.submenu?.numberOfItems == 0
                 || isMenuOpen else { return }
         guard let submenu = sensorsRoot.submenu else { return }
+        submenu.autoenablesItems = false
         submenu.removeAllItems()
 
         let readings = controller.temperatures?.all ?? []
         guard !readings.isEmpty else {
-            let empty = NSMenuItem(title: "Nessun sensore leggibile",
-                                   action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            submenu.addItem(empty)
+            submenu.addItem(NSMenuItem(title: "Nessun sensore leggibile",
+                                       action: nil, keyEquivalent: ""))
             return
         }
         for reading in readings {
             let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            item.isEnabled = false
             item.attributedTitle = Self.row(
                 label: reading.name,
                 value: String(format: "%.1f °C", reading.celsius))
@@ -314,7 +410,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let awake = controller.keepAwake
         switch awake.mode {
         case .off:
-            return "disattivata"
+            // Prestazioni e Massimo tengono una propria assertion: dire
+            // "disattivata" mentre il Mac non puo' comunque dormire sarebbe
+            // falso, ed e' il tipo di bugia che fa perdere fiducia in tutto
+            // il resto di quello che il menu mostra.
+            return controller.sleepPrevented
+                ? "disattivata (ma il profilo impedisce la sospensione)"
+                : "disattivata"
         case .indefinite:
             return "sempre attiva"
         case .duration:
@@ -347,7 +449,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             attributes: [
                 .font: NSFont.monospacedDigitSystemFont(
                     ofSize: NSFont.menuFont(ofSize: 0).pointSize, weight: .regular),
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .foregroundColor: NSColor.labelColor,
                 .paragraphStyle: paragraph,
             ]))
         return attributed
@@ -371,6 +473,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard let raw = sender.representedObject as? String,
               let option = Preferences.BarDisplay(rawValue: raw) else { return }
         Preferences.barDisplay = option
+        render()
+    }
+
+    @objc private func throttleNow() {
+        controller.throttleNow()
+    }
+
+    @objc private func restoreThrottled() {
+        controller.restoreThrottled()
+    }
+
+    @objc private func toggleAlerts() {
+        Preferences.alertsEnabled.toggle()
+        render()
+    }
+
+    @objc private func selectThreshold(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? Double else { return }
+        Preferences.alertThreshold = value
         render()
     }
 
@@ -436,6 +557,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         isMenuOpen = true
+        controller.adoptExternalProfileChange()
         poller.setForeground(true)
         controller.refreshState()
         // I watt costano un powermetrics: si chiedono solo mentre qualcuno

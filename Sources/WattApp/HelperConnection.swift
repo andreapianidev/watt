@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import ServiceManagement
 import WattKit
 
@@ -25,7 +26,20 @@ final class HelperConnection {
         SMAppService.daemon(plistName: WattIdentifiers.helperPlistName)
     }
 
+    /// `true` se l'helper e' gia' registrato direttamente in launchd da
+    /// `install-helper.sh`.
+    ///
+    /// I due percorsi di installazione non vanno mescolati: registrare anche
+    /// via SMAppService lascerebbe una voce in sospeso in Impostazioni di
+    /// Sistema per un demone che sta gia' girando, cioe' una richiesta di
+    /// permesso che non serve a nulla e che l'utente non sa come
+    /// interpretare.
+    private var isRegisteredInLaunchd: Bool {
+        FileManager.default.fileExists(atPath: WattIdentifiers.systemDaemonPlistPath)
+    }
+
     var installState: InstallState {
+        if isRegisteredInLaunchd { return .installed }
         switch service.status {
         case .enabled:          return .installed
         case .requiresApproval: return .needsApproval
@@ -40,6 +54,7 @@ final class HelperConnection {
     /// `requiresApproval` e nessuna chiamata XPC andra' a buon fine.
     @discardableResult
     func install() -> InstallState {
+        if isRegisteredInLaunchd { return .installed }
         if case .installed = installState { return .installed }
         do {
             try service.register()
@@ -66,8 +81,16 @@ final class HelperConnection {
             proxy.restoreAndCleanUp { @Sendable message in
                 Task { @MainActor in
                     self.disconnect()
-                    try? self.service.unregister()
-                    completion(message)
+                    if self.isRegisteredInLaunchd {
+                        // Installato a mano con privilegi di root: va rimosso
+                        // allo stesso modo, e l'app non li ha.
+                        completion((message.map { $0 + " " } ?? "")
+                            + "Per rimuovere l'helper: "
+                            + "sudo ./scripts/uninstall-helper.sh")
+                    } else {
+                        try? self.service.unregister()
+                        completion(message)
+                    }
                 }
             }
         }
@@ -80,8 +103,7 @@ final class HelperConnection {
             let newConnection = NSXPCConnection(
                 machServiceName: WattIdentifiers.helperMachService,
                 options: .privileged)
-            newConnection.remoteObjectInterface =
-                NSXPCInterface(with: WattHelperProtocol.self)
+            newConnection.remoteObjectInterface = makeWattHelperInterface()
             newConnection.invalidationHandler = { @Sendable [weak self] in
                 Task { @MainActor in self?.connection = nil }
             }
@@ -132,6 +154,34 @@ final class HelperConnection {
                       completion: @escaping @MainActor @Sendable (String?) -> Void) {
         callHelper(onFailure: { completion($0) }) { proxy in
             proxy.applyProfile(profile.rawValue) { @Sendable message in
+                Task { @MainActor in completion(message) }
+            }
+        }
+    }
+
+    /// I PID protetti sono quelli delle applicazioni con interfaccia: le
+    /// conosce solo il processo utente, e l'helper si fida di questa lista
+    /// per non rallentare ciò con cui stai lavorando.
+    func throttleHeavyBackground(
+        completion: @escaping @MainActor @Sendable (ThrottleReport?) -> Void
+    ) {
+        let protected = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .map { NSNumber(value: $0.processIdentifier) }
+
+        callHelper(onFailure: { _ in completion(nil) }) { proxy in
+            proxy.throttleHeavyBackground(protectedPIDs: protected) { @Sendable data in
+                let report = data.flatMap {
+                    try? JSONDecoder().decode(ThrottleReport.self, from: $0)
+                }
+                Task { @MainActor in completion(report) }
+            }
+        }
+    }
+
+    func restoreThrottled(completion: @escaping @MainActor @Sendable (String?) -> Void) {
+        callHelper(onFailure: { completion($0) }) { proxy in
+            proxy.restoreThrottled { @Sendable message in
                 Task { @MainActor in completion(message) }
             }
         }

@@ -29,6 +29,18 @@ PLIST="/Library/LaunchDaemons/$LABEL.plist"
 
 [[ -x "$SRC" ]] || { echo "Helper non trovato in $SRC" >&2; exit 1; }
 
+# Lo stderr di un demone launchd non finisce nel log unificato in modo
+# affidabile, e su file e' l'unico modo di diagnosticare un comando che
+# fallisce solo in quel contesto. Resta pero' spento: un file di log che
+# nessuno ruota cresce senza limite per sempre.
+#
+#   WATT_DEBUG=1 sudo ./scripts/install-helper.sh
+LOG_ENTRY=""
+if [[ "${WATT_DEBUG:-0}" == "1" ]]; then
+    LOG_ENTRY=$'    <key>StandardErrorPath</key>\n    <string>/var/log/watt-helper.log</string>'
+    echo "==> Diagnostica attiva: /var/log/watt-helper.log"
+fi
+
 # Verifica la firma prima di installare qualcosa come root: se il binario e'
 # stato manomesso dopo la build, e' l'ultimo momento utile per accorgersene.
 if ! codesign --verify --strict "$SRC" 2>/dev/null; then
@@ -62,11 +74,7 @@ cat > "$PLIST" <<PLISTEOF
         <key>$LABEL</key>
         <true/>
     </dict>
-    <!-- Lo stderr di un demone launchd non finisce nel log unificato in modo
-         affidabile: dirottarlo su file e' l'unico modo per diagnosticare un
-         comando di sistema che fallisce solo in questo contesto. -->
-    <key>StandardErrorPath</key>
-    <string>/var/log/watt-helper.log</string>
+$LOG_ENTRY
 </dict>
 </plist>
 PLISTEOF

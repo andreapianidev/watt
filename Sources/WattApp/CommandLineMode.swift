@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import ServiceManagement
 import WattKit
 
 /// Modalita' da riga di comando.
@@ -27,6 +29,47 @@ enum CommandLineMode {
                 fail("Uso: Watt --apply <\(PowerProfile.allCases.map(\.rawValue).joined(separator: "|"))>")
             }
             apply(profile)
+            return true
+
+        case "--login":
+            let wanted = arguments.dropFirst().first
+            guard let wanted, ["on", "off"].contains(wanted) else {
+                fail("Uso: Watt --login <on|off>")
+            }
+            Preferences.launchAtLogin = (wanted == "on")
+            print("apertura all'avvio: "
+                + (Preferences.launchAtLogin ? "attiva" : "disattivata"))
+            return true
+
+        case "--uninstall":
+            uninstall()
+            return true
+
+        case "--throttle":
+            // Le applicazioni con interfaccia si proteggono anche da qui:
+            // l'helper si fida di questa lista, e ometterla significherebbe
+            // rallentare l'editor da cui hai lanciato il comando.
+            let protected = NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular }
+                .map { NSNumber(value: $0.processIdentifier) }
+            let data: Data? = callHelper(timeout: 60) { proxy, done in
+                proxy.throttleHeavyBackground(protectedPIDs: protected) { done($0) }
+            }
+            guard let data,
+                  let report = try? JSONDecoder().decode(ThrottleReport.self, from: data)
+            else { fail("Helper non raggiungibile.") }
+            print(report.summary)
+            for entry in report.throttled.prefix(20) {
+                print(String(format: "   %-24@ %5.1f%%  %6.0f MB",
+                             entry.name as NSString, entry.cpuPercent, entry.memoryMB))
+            }
+            return true
+
+        case "--unthrottle":
+            _ = callHelper(timeout: 60) { proxy, done in
+                proxy.restoreThrottled { done($0 ?? "") }
+            } as String?
+            print("priorità normale ripristinata")
             return true
 
         case "--temps":
@@ -89,7 +132,11 @@ enum CommandLineMode {
           Watt --status            stato del sistema e consumi correnti
           Watt --profiles          elenca i profili e cosa fanno
           Watt --temps             tutte le temperature dei sensori
+          Watt --throttle          rallenta i background che consumano
+          Watt --unthrottle        ne ripristina la priorità normale
           Watt --purge             libera la memoria inattiva
+          Watt --login <on|off>    apertura automatica all'accesso
+          Watt --uninstall         ripristina le impostazioni e deregistra
           Watt --run <profilo> -- <comando ...>
                                    esegue il comando con il profilo applicato
                                    e ripristina quello precedente alla fine
@@ -108,10 +155,17 @@ enum CommandLineMode {
         // fuori App Nap.
         AppNapControl.setDisabled(profile.plan.disableAppNap)
 
+        // Salvare la scelta e' parte dell'applicarla. Senza, il sistema
+        // veniva configurato ma la preferenza restava al profilo precedente:
+        // la barra dei menu continuava a mostrare quello vecchio, e alla
+        // prima riscrittura lo rimetteva pure in vigore. La scrittura emette
+        // anche la notifica che allinea un'app gia' in esecuzione.
+        Preferences.selectedProfile = profile
+
         // La reply dell'helper e' `nil` in caso di successo, il che
         // collide con il `nil` che `callHelper` usa per "irraggiungibile".
         // Si trasporta il successo come stringa vuota per distinguerli.
-        let outcome: String? = callHelper { proxy, done in
+        let outcome: String? = callHelper(timeout: 90) { proxy, done in
             proxy.applyProfile(profile.rawValue) { done($0 ?? "") }
         }
         guard let outcome else {
@@ -191,6 +245,48 @@ enum CommandLineMode {
         }
     }
 
+    /// Riporta il sistema alla baseline e rimuove ogni registrazione.
+    ///
+    /// L'ordine conta: prima si fa ripristinare all'helper le impostazioni,
+    /// poi lo si deregistra. Al contrario non resterebbe nessuno a
+    /// riaccendere Spotlight, e l'utente si troverebbe l'indicizzazione in
+    /// pausa senza piu' alcuna interfaccia per rimediare.
+    private static func uninstall() {
+        let outcome: String? = callHelper { proxy, done in
+            proxy.restoreAndCleanUp { done($0 ?? "") }
+        }
+        switch outcome {
+        case .none:
+            print("helper non raggiungibile: niente da ripristinare")
+        case .some(let message) where !message.isEmpty:
+            FileHandle.standardError.write(
+                Data("ripristino incompleto: \(message)\n".utf8))
+        default:
+            print("impostazioni ripristinate")
+        }
+
+        AppNapControl.setDisabled(false)
+
+        // La registrazione via SMAppService, se c'e', va tolta da qui: e'
+        // legata all'identita' di questo bundle e nessun comando esterno puo'
+        // rimuoverla al posto suo.
+        let daemon = SMAppService.daemon(plistName: WattIdentifiers.helperPlistName)
+        if daemon.status != .notRegistered {
+            do {
+                try daemon.unregister()
+                print("registrazione SMAppService rimossa")
+            } catch {
+                FileHandle.standardError.write(Data(
+                    "SMAppService non deregistrato: \(error.localizedDescription)\n".utf8))
+            }
+        }
+
+        if FileManager.default.fileExists(atPath: WattIdentifiers.systemDaemonPlistPath) {
+            print("l'helper e' registrato in launchd, per rimuoverlo:")
+            print("  sudo ./scripts/uninstall-helper.sh")
+        }
+    }
+
     /// Applica un profilo, esegue un comando, ripristina il profilo
     /// precedente. Il ripristino avviene anche se il comando fallisce o viene
     /// interrotto: un profilo lasciato acceso da uno script che e' morto a
@@ -206,21 +302,22 @@ enum CommandLineMode {
         let previous = Preferences.selectedProfile
 
         let restore = {
-            _ = callHelper { proxy, done in
+            _ = callHelper(timeout: 90) { proxy, done in
                 proxy.applyProfile(previous.rawValue) { done($0) }
             } as String?
             AppNapControl.setDisabled(previous.plan.disableAppNap)
         }
-        // Anche su interruzione da tastiera.
-        for signalNumber in [SIGINT, SIGTERM] {
-            signal(signalNumber) { _ in
-                // Il gestore di segnale deve restare minimale; il ripristino
-                // vero passa dal codice di uscita normale del processo figlio,
-                // qui si esce e basta.
-                exit(130)
-            }
-        }
-        atexit_b { restore() }
+        // Ctrl-C raggiunge l'intero gruppo di processi, quindi il figlio la
+        // riceve da se' e questo processo puo' limitarsi ad aspettarne la
+        // fine e ripristinare per la via normale.
+        //
+        // Il gestore precedente chiamava `exit()` dal contesto di segnale:
+        // `exit()` esegue gli handler registrati con `atexit`, che qui
+        // significa XPC e Foundation, e nessuna delle due e'
+        // async-signal-safe. Ignorare il segnale e lasciar terminare il
+        // figlio ottiene lo stesso risultato senza il rischio.
+        signal(SIGINT, SIG_IGN)
+        signal(SIGTERM, SIG_IGN)
 
         apply(profile)
 
@@ -230,9 +327,12 @@ enum CommandLineMode {
         do {
             try process.run()
         } catch {
-            fail("impossibile eseguire \(command.joined(separator: " ")): \(error.localizedDescription)")
+            restore()
+            fail("impossibile eseguire \(command.joined(separator: " ")): "
+               + error.localizedDescription)
         }
         process.waitUntilExit()
+        restore()
         exit(process.terminationStatus)
     }
 
@@ -240,13 +340,19 @@ enum CommandLineMode {
 
     /// Attende la risposta dell'helper con un semaforo: in modalita' CLI non
     /// c'e' un run loop su cui appoggiare una callback asincrona.
+    /// - Parameter timeout: applicare un profilo comporta `purge` e
+    ///   `taskpolicy` su tutti i daemon vivi, e una decina di secondi e'
+    ///   normale. Letture e ripristino no: usare per tutti l'attesa piu'
+    ///   lunga significava restare bloccati un minuto e mezzo davanti a un
+    ///   helper semplicemente assente.
     private static func callHelper<T>(
+        timeout: TimeInterval = 15,
         _ body: (WattHelperProtocol, @escaping (T?) -> Void) -> Void
     ) -> T? {
         let connection = NSXPCConnection(
             machServiceName: WattIdentifiers.helperMachService,
             options: .privileged)
-        connection.remoteObjectInterface = NSXPCInterface(with: WattHelperProtocol.self)
+        connection.remoteObjectInterface = makeWattHelperInterface()
         connection.resume()
         defer { connection.invalidate() }
 

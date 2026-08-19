@@ -21,6 +21,22 @@ import Foundation
     /// Un campione di `powermetrics`. Payload: `PowerSample` in JSON.
     func sampleMetrics(reply: @escaping (Data?) -> Void)
 
+    /// Individua i processi in background che stanno consumando CPU e li
+    /// confina sugli E-core.
+    ///
+    /// - Parameter protectedPIDs: PID delle applicazioni con interfaccia,
+    ///   raccolti dall'app. L'helper non può distinguerle da solo — dal suo
+    ///   punto di vista Xcode che compila e un daemon che indicizza sono
+    ///   entrambi processi che consumano — e rallentare ciò con cui stai
+    ///   lavorando sarebbe esattamente il contrario di quello che serve.
+    ///
+    /// Payload della risposta: `ThrottleReport` in JSON.
+    func throttleHeavyBackground(protectedPIDs: [NSNumber],
+                                 reply: @escaping (Data?) -> Void)
+
+    /// Ripristina la priorità normale di tutto ciò che era stato rallentato.
+    func restoreThrottled(reply: @escaping (String?) -> Void)
+
     /// Libera la memoria inattiva con `purge`.
     ///
     /// Misurato su M2 Air / macOS 27: circa 1 GB liberato in 1,3 secondi.
@@ -32,6 +48,21 @@ import Foundation
     /// Va chiamata prima di deregistrare l'helper, altrimenti il Mac resta
     /// con Spotlight in pausa e la sospensione disabilitata.
     func restoreAndCleanUp(reply: @escaping (String?) -> Void)
+}
+
+/// Costruisce l'interfaccia XPC.
+///
+/// NSXPCConnection accetta di default solo un insieme ristretto di tipi: per
+/// un argomento `[NSNumber]` le classi consentite vanno dichiarate
+/// esplicitamente, altrimenti la chiamata viene rifiutata a runtime con un
+/// errore che non nomina l'argomento colpevole.
+public func makeWattHelperInterface() -> NSXPCInterface {
+    let interface = NSXPCInterface(with: WattHelperProtocol.self)
+    let selector = #selector(WattHelperProtocol.throttleHeavyBackground(protectedPIDs:reply:))
+    interface.setClasses(
+        NSSet(array: [NSArray.self, NSNumber.self]) as! Set<AnyHashable>,
+        for: selector, argumentIndex: 0, ofReply: false)
+    return interface
 }
 
 public enum WattHelperVersion {

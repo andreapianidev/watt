@@ -27,4 +27,9 @@ public enum WattIdentifiers {
 
     /// Percorso dello snapshot delle impostazioni originali del sistema.
     public static let baselinePath = "/Library/Application Support/Watt/baseline.json"
+
+    /// Plist scritto da `scripts/install-helper.sh` quando l'helper viene
+    /// registrato direttamente in launchd invece che via SMAppService.
+    public static let systemDaemonPlistPath =
+        "/Library/LaunchDaemons/dev.andreapiani.watt.helper.plist"
 }

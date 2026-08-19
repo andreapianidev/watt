@@ -17,6 +17,10 @@ final class PowerController {
     /// Sensori termici HID. Come IOReport non richiedono privilegi, quindi
     /// restano nell'app e funzionano anche senza helper installato.
     private let sensors = ThermalSensors()
+    private let alert = TemperatureAlert()
+
+    private(set) var history = TemperatureHistory()
+    private(set) var throttleReport: ThrottleReport?
 
     /// Sveglia controllata dall'utente, indipendente dal profilo: un Mac
     /// tenuto sveglio durante una build non ha niente a che vedere con la
@@ -38,6 +42,23 @@ final class PowerController {
         self.profile = Preferences.selectedProfile
         self.keepAwake.keepDisplayOn = Preferences.keepDisplayOn
         self.keepAwake.onChange = { [weak self] in self?.notify() }
+        self.alert.requestAuthorizationIfNeeded()
+
+        // Un cambio di profilo fatto da riga di comando deve comparire subito
+        // nel menu, non alla prossima interazione.
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name(Preferences.profileChangedNotification),
+            object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let raw = notification.object as? String,
+                  let profile = PowerProfile(rawValue: raw) else { return }
+            Task { @MainActor in
+                guard let self, profile != self.profile else { return }
+                self.profile = profile
+                self.syncLocalSideEffects(for: profile)
+                self.notify()
+            }
+        }
     }
 
     // MARK: - Profili
@@ -50,19 +71,43 @@ final class PowerController {
         let plan = profile.plan
         // La parte senza privilegi si applica subito: non dipende
         // dall'helper e resta valida anche se l'utente non l'ha approvato.
-        AppNapControl.setDisabled(plan.disableAppNap)
-        if plan.preventIdleSleep {
-            sleepAssertion.acquire(reason: "Watt: profilo \(profile.title)")
-        } else {
-            sleepAssertion.release()
-        }
+        syncLocalSideEffects(for: profile)
         notify()
 
         helper.applyProfile(profile) { [weak self] failure in
             guard let self else { return }
             self.lastError = failure
+
+            // Solo Massimo sceglie da sé cosa rallentare. Gli altri profili
+            // rimettono a posto: un processo lasciato confinato sugli E-core
+            // dopo che sei tornato ad Automatico è una modifica invisibile
+            // che l'utente non ha modo di scoprire né di annullare.
+            if plan.demoteBackgroundDaemons {
+                self.helper.throttleHeavyBackground { report in
+                    self.throttleReport = report
+                    self.notify()
+                }
+            } else if self.throttleReport != nil {
+                self.helper.restoreThrottled { _ in
+                    self.throttleReport = nil
+                    self.notify()
+                }
+            }
+
             self.refreshState()
             completion?()
+        }
+    }
+
+    /// Effetti del profilo che non richiedono privilegi. Vanno riapplicati
+    /// anche quando il profilo cambia per iniziativa di un altro processo.
+    private func syncLocalSideEffects(for profile: PowerProfile) {
+        let plan = profile.plan
+        AppNapControl.setDisabled(plan.disableAppNap)
+        if plan.preventIdleSleep {
+            sleepAssertion.acquire(reason: "Watt: profilo \(profile.title)")
+        } else {
+            sleepAssertion.release()
         }
     }
 
@@ -75,6 +120,17 @@ final class PowerController {
     }
 
     // MARK: - Letture
+
+    /// Rete di sicurezza per il caso in cui la notifica si perda: rilegge la
+    /// preferenza dal disco e si allinea senza riapplicare nulla al sistema,
+    /// che è già stato configurato da chi ha fatto il cambio.
+    func adoptExternalProfileChange() {
+        let stored = Preferences.reloadedProfile()
+        guard stored != profile else { return }
+        profile = stored
+        syncLocalSideEffects(for: stored)
+        notify()
+    }
 
     func refreshState() {
         helper.readSystemState { [weak self] state in
@@ -98,6 +154,19 @@ final class PowerController {
     func refreshMetrics() {
         memory = MemoryReader.read()
         temperatures = sensors?.read()
+
+        if let summary = temperatures, !summary.all.isEmpty {
+            // La media è su tutti i sensori, la massima è il punto più caldo:
+            // insieme dicono se scalda tutto il SoC o un solo cluster.
+            let values = summary.all.map(\.celsius)
+            history.append(maximum: values.max() ?? 0,
+                           average: values.reduce(0, +) / Double(values.count))
+            alert.evaluate(
+                socCelsius: summary.socCelsius,
+                throttling: ThermalPressure(
+                    processInfoState: ProcessInfo.processInfo.thermalState)
+                    .isThrottling)
+        }
 
         var sample = lastSample ?? PowerSample()
         if let reading = ioReport?.sample() {
@@ -135,6 +204,24 @@ final class PowerController {
             self.memory = MemoryReader.read()
             self.notify()
             completion?(failure)
+        }
+    }
+
+    /// Rallentamento su richiesta, indipendente dal profilo.
+    func throttleNow(completion: (@MainActor @Sendable (ThrottleReport?) -> Void)? = nil) {
+        helper.throttleHeavyBackground { [weak self] report in
+            guard let self else { return }
+            self.throttleReport = report
+            self.notify()
+            completion?(report)
+        }
+    }
+
+    func restoreThrottled() {
+        helper.restoreThrottled { [weak self] _ in
+            guard let self else { return }
+            self.throttleReport = nil
+            self.notify()
         }
     }
 

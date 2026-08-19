@@ -81,6 +81,23 @@ final class HelperService: NSObject, WattHelperProtocol {
         }
     }
 
+    func throttleHeavyBackground(protectedPIDs: [NSNumber],
+                                 reply: @escaping (Data?) -> Void) {
+        activity()
+        queue.async {
+            let protectedSet = Set(protectedPIDs.map { $0.int32Value })
+            let report = SmartThrottle.throttleHeavyBackground(
+                protectedPIDs: protectedSet)
+            NSLog("[Watt] rallentati %d processi", report.throttled.count)
+            reply(try? JSONEncoder().encode(report))
+        }
+    }
+
+    func restoreThrottled(reply: @escaping (String?) -> Void) {
+        activity()
+        queue.async { reply(SmartThrottle.restoreThrottled()) }
+    }
+
     func purgeMemory(reply: @escaping (String?) -> Void) {
         activity()
         queue.async {
@@ -129,7 +146,7 @@ final class HelperListenerDelegate: NSObject, NSXPCListenerDelegate {
             return false
         }
 
-        connection.exportedInterface = NSXPCInterface(with: WattHelperProtocol.self)
+        connection.exportedInterface = makeWattHelperInterface()
         connection.exportedObject = service
         connection.resume()
         return true
