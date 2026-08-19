@@ -36,6 +36,20 @@ public enum ThermalPressure: String, Codable, Sendable {
         }
     }
 
+    /// Traduce `ProcessInfo.thermalState`, che e' API pubblica e non
+    /// richiede privilegi ne' processi esterni. E' meno granulare del
+    /// `thermal_pressure` di powermetrics ma distingue comunque il caso che
+    /// conta: se il sistema sta limitando le prestazioni oppure no.
+    public init(processInfoState: ProcessInfo.ThermalState) {
+        switch processInfoState {
+        case .nominal:  self = .nominal
+        case .fair:     self = .moderate
+        case .serious:  self = .heavy
+        case .critical: self = .trapping
+        @unknown default: self = .unknown
+        }
+    }
+
     public var symbolName: String {
         switch self {
         case .nominal, .unknown: return "checkmark.circle.fill"

@@ -25,12 +25,21 @@ enum PowerMetricsSampler {
            let parsed = parsePlist(plistRun.stdoutData) {
             return parsed
         }
+        NSLog("[Watt] powermetrics plist fallito: stato=%d stderr=%@ bytes=%d",
+              plistRun.status,
+              plistRun.stderr.trimmingCharacters(in: .whitespacesAndNewlines),
+              plistRun.stdoutData.count)
 
         let textRun = CommandRunner.run(
             Tool.powermetrics,
             ["--samplers", "cpu_power,thermal",
              "-n", "1", "-i", String(sampleIntervalMs)],
             timeout: 15)
+        if !textRun.succeeded {
+            NSLog("[Watt] powermetrics testo fallito: stato=%d stderr=%@",
+                  textRun.status,
+                  textRun.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
         return parseText(textRun.stdout)
     }
 

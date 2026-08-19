@@ -31,6 +31,20 @@ if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--parse" {
     exit(0)
 }
 
+// `watt-helper --sample` esegue un campionamento nello stesso modo in cui
+// lo farebbe rispondendo a una chiamata XPC, ma stampando su stdout. Serve a
+// distinguere un problema del parser da un problema del contesto in cui gira
+// il demone.
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--sample" {
+    let started = Date()
+    let sample = PowerMetricsSampler.sample()
+    print(String(format: "durata: %.1fs", Date().timeIntervalSince(started)))
+    print("P-core   : \(sample.pCoreSummary ?? "n/d")")
+    print("pacchetto: \(sample.packageWattsText ?? "n/d")")
+    print("termico  : \(sample.thermalPressure.label)")
+    exit(0)
+}
+
 NSLog("[Watt] helper %@ avviato", WattHelperVersion.current)
 
 /// Uscita per inattivita': launchd rilancia il demone alla prima connessione

@@ -40,13 +40,47 @@ enum ProfileApplier {
         setTimeMachine(enabled: !plan.pauseTimeMachine,
                        baseline: baseline, &report)
 
-        if plan.demoteBackgroundDaemons {
-            demoteBackgroundDaemons(&report)
-        } else {
-            restoreBackgroundDaemons(&report)
+        // Solo se lo stato desiderato differisce da quello in vigore:
+        // rilanciare `taskpolicy` su tutti i daemon a ogni cambio di profilo
+        // costava quasi dieci secondi per un clic, quasi sempre per non
+        // cambiare nulla.
+        if plan.demoteBackgroundDaemons != DemotionState.isDemoted {
+            if plan.demoteBackgroundDaemons {
+                demoteBackgroundDaemons(&report)
+            } else {
+                restoreBackgroundDaemons(&report)
+            }
+            DemotionState.isDemoted = plan.demoteBackgroundDaemons
+        }
+
+        if plan.purgeMemory {
+            purgeMemory(&report)
         }
 
         return report
+    }
+
+    /// Se i daemon sono attualmente confinati sugli E-core.
+    ///
+    /// Persistito su file e non in memoria: l'helper esce dopo tre minuti di
+    /// inattivita', e una variabile si perderebbe fra un cambio di profilo e
+    /// il successivo, riportando il costo a ogni clic.
+    enum DemotionState {
+        private static let path = "/Library/Application Support/Watt/demoted"
+
+        static var isDemoted: Bool {
+            get { FileManager.default.fileExists(atPath: path) }
+            set {
+                if newValue {
+                    try? FileManager.default.createDirectory(
+                        atPath: (path as NSString).deletingLastPathComponent,
+                        withIntermediateDirectories: true)
+                    FileManager.default.createFile(atPath: path, contents: nil)
+                } else {
+                    try? FileManager.default.removeItem(atPath: path)
+                }
+            }
+        }
     }
 
     static func restore(_ baseline: Baseline, into report: inout Report) {
@@ -60,7 +94,10 @@ enum ProfileApplier {
                              baseline: baseline, &report, force: true)
         setTimeMachine(enabled: baseline.timeMachineAutomatic,
                        baseline: baseline, &report, force: true)
-        restoreBackgroundDaemons(&report)
+        if DemotionState.isDemoted {
+            restoreBackgroundDaemons(&report)
+            DemotionState.isDemoted = false
+        }
     }
 
     // MARK: - Singole leve
@@ -105,29 +142,44 @@ enum ProfileApplier {
     /// Non uccide nulla e non impedisce al lavoro di completarsi: lo rende
     /// solo cedevole rispetto a cio' che hai in primo piano.
     private static func demoteBackgroundDaemons(_ report: inout Report) {
-        var failed: [String] = []
-        for name in BackgroundDaemons.names {
-            for pid in CommandRunner.pids(forProcessNamed: name) {
-                let result = CommandRunner.run(
-                    Tool.taskpolicy, ["-b", "-p", String(pid)], timeout: 5)
-                if !result.succeeded { failed.append("\(name)(\(pid))") }
-            }
-        }
-        // I daemon rinascono in continuazione: un fallimento isolato quasi
-        // sempre significa che il processo e' morto fra `pgrep` e
-        // `taskpolicy`. Si segnala solo se fallisce l'intera lista.
-        if failed.count == BackgroundDaemons.names.count && !failed.isEmpty {
+        let changed = setBackgroundTier("-b")
+        if changed == 0 {
             report.failures.append("taskpolicy: nessun daemon degradato")
         }
     }
 
     private static func restoreBackgroundDaemons(_ report: inout Report) {
+        _ = setBackgroundTier("-B")
+    }
+
+    /// Applica il flag a tutti i daemon noti trovati vivi e ritorna quanti
+    /// ne ha effettivamente modificati.
+    ///
+    /// I fallimenti singoli si ignorano di proposito: questi processi
+    /// nascono e muoiono in continuazione, e un `taskpolicy` che fallisce
+    /// quasi sempre significa che il PID e' sparito fra la lettura della
+    /// tabella e la chiamata. Conta solo che almeno uno sia stato preso.
+    @discardableResult
+    private static func setBackgroundTier(_ flag: String) -> Int {
+        let table = CommandRunner.processTable()
+        var changed = 0
         for name in BackgroundDaemons.names {
-            for pid in CommandRunner.pids(forProcessNamed: name) {
-                CommandRunner.run(Tool.taskpolicy,
-                                  ["-B", "-p", String(pid)], timeout: 5)
+            for pid in table[name] ?? [] {
+                let result = CommandRunner.run(
+                    Tool.taskpolicy, [flag, "-p", String(pid)], timeout: 5)
+                if result.succeeded { changed += 1 }
             }
         }
+        return changed
+    }
+
+    /// Libera la memoria inattiva. Operazione una tantum e senza inverso:
+    /// non tocca la baseline e non viene "annullata" da Automatico, perche'
+    /// non c'e' nulla da annullare.
+    static func purgeMemory(_ report: inout Report) {
+        let result = CommandRunner.run(Tool.purge, [], timeout: 30)
+        guard !result.succeeded else { return }
+        report.failures.append("purge: " + shortError(result))
     }
 
     private static func shortError(_ result: CommandResult) -> String {

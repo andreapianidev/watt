@@ -1,5 +1,9 @@
 import AppKit
 
+// In modalita' da riga di comando non si avvia NSApplication: il processo
+// parla con l'helper, stampa ed esce.
+if CommandLineMode.run() { exit(0) }
+
 let application = NSApplication.shared
 let delegate = AppDelegate()
 application.delegate = delegate

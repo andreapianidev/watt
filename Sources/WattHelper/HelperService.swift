@@ -7,6 +7,25 @@ import WattKit
 final class HelperService: NSObject, WattHelperProtocol {
 
     private let queue = DispatchQueue(label: "dev.andreapiani.watt.helper.work")
+
+    /// Coda dedicata e **seriale** per il campionamento.
+    ///
+    /// `powermetrics` viene lanciato sia dall'app in barra dei menu sia da
+    /// eventuali invocazioni da riga di comando. Servendole su una coda
+    /// concorrente, ogni chiamata bloccava un thread in attesa del processo
+    /// piu' due per la lettura dei pipe: bastavano poche richieste
+    /// sovrapposte a esaurire il pool di GCD, e le letture non venivano piu'
+    /// schedulate. Il risultato era un `powermetrics` che sembrava non
+    /// terminare mai e restituiva zero byte.
+    private let samplerQueue = DispatchQueue(label: "dev.andreapiani.watt.helper.sampler")
+
+    /// Ultimo campione, condiviso fra chiamanti ravvicinati.
+    private var cachedSample: (sample: PowerSample, takenAt: Date)?
+    /// Sotto questa eta' il campione precedente viene riusato: due client che
+    /// chiedono i consumi nello stesso istante non hanno motivo di far girare
+    /// `powermetrics` due volte, e ogni esecuzione consuma a sua volta.
+    private let cacheLifetime: TimeInterval = 2
+
     private let activity: () -> Void
 
     init(onActivity: @escaping () -> Void) {
@@ -44,13 +63,30 @@ final class HelperService: NSObject, WattHelperProtocol {
 
     func sampleMetrics(reply: @escaping (Data?) -> Void) {
         activity()
-        // Fuori dalla coda seriale: un campione dura mezzo secondo e non deve
-        // ritardare l'applicazione di un profilo scelto nel frattempo.
-        DispatchQueue.global(qos: .utility).async {
-            let sample = PowerMetricsSampler.sample()
+        // Coda propria, separata da quella dei profili: un campione dura
+        // mezzo secondo e non deve ritardare l'applicazione di un profilo
+        // scelto nel frattempo. Ma seriale, mai concorrente.
+        samplerQueue.async {
+            let sample: PowerSample
+            if let cached = self.cachedSample,
+               Date().timeIntervalSince(cached.takenAt) < self.cacheLifetime {
+                sample = cached.sample
+            } else {
+                sample = PowerMetricsSampler.sample()
+                self.cachedSample = (sample, Date())
+            }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             reply(try? encoder.encode(sample))
+        }
+    }
+
+    func purgeMemory(reply: @escaping (String?) -> Void) {
+        activity()
+        queue.async {
+            var report = ProfileApplier.Report()
+            ProfileApplier.purgeMemory(&report)
+            reply(report.summary)
         }
     }
 

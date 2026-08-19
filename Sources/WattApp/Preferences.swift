@@ -29,6 +29,11 @@ enum Preferences {
         set { UserDefaults.standard.set(newValue, forKey: intervalKey) }
     }
 
+    static var keepDisplayOn: Bool {
+        get { UserDefaults.standard.bool(forKey: "keepDisplayOn") }
+        set { UserDefaults.standard.set(newValue, forKey: "keepDisplayOn") }
+    }
+
     static var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {

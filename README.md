@@ -72,17 +72,53 @@ La barra dei menu mostra la frequenza dei P-core e, quando `thermal_pressure`
 non è `Nominal`, cambia icona per dirti che stai throttlando. È
 l'informazione per cui vale la pena installare l'app.
 
+## Come legge i dati: IOReport, non powermetrics
+
+Il numero in barra dei menu **non** viene da `powermetrics`. `powermetrics`
+è solo un client di **IOReport**, l'API IOKit che espone i contatori del
+silicio, e Watt la interroga direttamente:
+
+- **nessun processo lanciato a ogni campione** — e quindi nessuna delle gare
+  sui descrittori dei pipe che affliggono chi fa `fork`/`exec` in
+  concorrenza;
+- **nessun privilegio richiesto** — le frequenze si vedono anche con
+  l'helper disinstallato;
+- **risposta immediata**, contro il mezzo secondo di una sessione di
+  `powermetrics`.
+
+Le frequenze si ricavano dalle residenze per stato DVFS dei due complessi
+(`CPU Stats` → `CPU Complex Performance States`), pesate sulla tabella
+`voltage-states` letta dal nodo `pmgr` del registro IO. Quella tabella
+non è inchiodata nel codice: su questo M2 restituisce 3504 MHz per i P-core
+e 2424 per gli E-core, ma su un altro Apple Silicon restituirà i suoi.
+
+La media esclude gli stati di riposo, perché la domanda a cui la barra dei
+menu risponde è «a che velocità gira quando lavora», non «quanto ha
+lavorato»: includerli farebbe crollare il numero proprio quando il Mac è
+fermo, cioè quando interessa meno. È la stessa convenzione di `freq_hz` in
+`powermetrics`, verificata ricalcolandola a mano dalle residenze.
+
+La pressione termica arriva da `ProcessInfo.thermalState`, che è API
+pubblica e gratuita. `powermetrics` resta usato per una cosa sola, i watt
+del package, e solo mentre il menu è aperto.
+
+I simboli IOReport vivono in `/usr/lib/libIOReport.dylib` e non sono
+dichiarati in alcun header pubblico, quindi si risolvono a runtime: se un
+aggiornamento di macOS li spostasse, Watt perde quelle letture e continua a
+funzionare invece di crollare.
+
 ## Come è fatto
 
 ```
 Watt.app
-├─ Contents/MacOS/Watt              app AppKit, LSUIElement
+├─ Contents/MacOS/Watt              app AppKit, LSUIElement + modalità CLI
 ├─ Contents/MacOS/watt-helper       demone root, on-demand via launchd
-└─ Contents/Library/LaunchDaemons/  registrato con SMAppService
+└─ Contents/Library/LaunchDaemons/  per la registrazione via SMAppService
 ```
 
-Servono privilegi di root solo per `pmset`, `mdutil`, `tmutil`, `taskpolicy`
-e `powermetrics`. Tutto il resto sta nell'app.
+Servono privilegi di root solo per **applicare** i profili: `pmset`,
+`mdutil`, `tmutil`, `taskpolicy`, `purge`. Tutte le **letture** — frequenze,
+tetto DVFS, stato termico, memoria — avvengono nell'app senza privilegi.
 
 Scelte che vale la pena conoscere prima di leggere il codice:
 
@@ -106,6 +142,14 @@ Scelte che vale la pena conoscere prima di leggere il codice:
 - **Lo stato mostrato è riletto dal sistema**, non dedotto dal profilo
   selezionato: se cambi Low Power Mode da Impostazioni di Sistema, il menu lo
   dice.
+- **L'helper serializza ogni esecuzione di comandi.** Lanciare processi in
+  concorrenza dallo stesso demone produce una gara sui descrittori: un figlio
+  eredita l'estremo in scrittura del pipe di un altro, e il lettore resta
+  bloccato su un EOF che non arriva mai. Costava un `powermetrics` che
+  sembrava non terminare, con zero byte letti.
+- **Il confino dei daemon sugli E-core si applica solo se cambia.**
+  Rilanciare `taskpolicy` su tutta la lista a ogni cambio di profilo costava
+  quasi dieci secondi per clic, quasi sempre per non cambiare nulla.
 
 ## Compilare
 
@@ -135,6 +179,45 @@ registrazione del demone fallisce con un opaco `Operation not permitted`.
 Al primo avvio il demone resta in attesa: va abilitato in **Impostazioni di
 Sistema → Generali → Elementi login ed estensioni**. Finché non lo fai
 restano attivi solo i profili nella parte che non richiede privilegi.
+
+## Sveglia (come Amphetamine)
+
+Il secondo mestiere dell'app. Impedisce al Mac di addormentarsi, con le
+modalità che servono davvero:
+
+- **Sempre attiva**, finché non la spegni;
+- **a tempo** — 15 minuti, 30, 1 ora, 2, 5;
+- **durante le build**, che è quella per cui è nata: tiene sveglio il Mac
+  finché è in esecuzione `xcodebuild`, `swift-frontend`, `node`, `cargo`,
+  `make`, `docker`, `ffmpeg` e simili, e lo lascia dormire appena finiscono.
+  Il menu mostra *quale* processo la sta tenendo attiva, così non è una
+  scatola nera.
+
+Opzionale: tenere acceso anche lo schermo. Di default no — un profilo
+prestazionale non è una buona ragione per illuminare un pannello che nessuno
+guarda.
+
+Usa `IOPMAssertion`, che il kernel rilascia da sé quando il processo termina,
+anche per crash o `kill -9`. Non c'è nessuno stato persistente e nessun modo
+di lasciare il Mac sveglio per sempre per sbaglio.
+
+## Riga di comando
+
+L'app **è** anche la CLI, ed è pensata per gli script di build:
+
+```bash
+Watt --status                  # frequenze, termico, stato (senza helper: funziona lo stesso)
+Watt --apply massimo           # applica un profilo
+Watt --purge                   # libera la memoria inattiva
+Watt --profiles                # cosa fa ciascun profilo
+
+# La più utile: applica un profilo, esegue, ripristina il precedente
+Watt --run massimo -- xcodebuild -scheme App build
+```
+
+`--run` ripristina il profilo precedente anche se il comando fallisce o viene
+interrotto: uno script morto a metà non deve lasciarti un Mac con
+l'indicizzazione in pausa.
 
 ## Strumenti
 

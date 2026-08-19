@@ -137,6 +137,14 @@ final class HelperConnection {
         }
     }
 
+    func purgeMemory(completion: @escaping @MainActor @Sendable (String?) -> Void) {
+        callHelper(onFailure: { completion($0) }) { proxy in
+            proxy.purgeMemory { @Sendable message in
+                Task { @MainActor in completion(message) }
+            }
+        }
+    }
+
     func readSystemState(completion: @escaping @MainActor @Sendable (SystemState?) -> Void) {
         callHelper(onFailure: { _ in completion(nil) }) { proxy in
             proxy.readSystemState { @Sendable data in

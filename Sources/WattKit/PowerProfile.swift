@@ -77,7 +77,7 @@ public enum PowerProfile: String, Codable, CaseIterable, Sendable {
             return ProfilePlan(lowPowerMode: false, powerNap: false,
                                pauseSpotlight: true, pauseTimeMachine: true,
                                disableAppNap: true, preventIdleSleep: true,
-                               demoteBackgroundDaemons: true)
+                               demoteBackgroundDaemons: true, purgeMemory: true)
         }
     }
 }
@@ -91,6 +91,9 @@ public struct ProfilePlan: Codable, Sendable {
     public var pauseSpotlight: Bool
     public var pauseTimeMachine: Bool
     public var demoteBackgroundDaemons: Bool
+    /// Libera la memoria inattiva al momento dell'applicazione. Una tantum,
+    /// non uno stato: non ha un inverso e non entra nella baseline.
+    public var purgeMemory: Bool
     /// Se `true`, prima di tutto ripristina lo snapshot originale.
     public var restoreBaseline: Bool
 
@@ -110,6 +113,7 @@ public struct ProfilePlan: Codable, Sendable {
                 pauseSpotlight: Bool = false, pauseTimeMachine: Bool = false,
                 disableAppNap: Bool = false, preventIdleSleep: Bool = false,
                 demoteBackgroundDaemons: Bool = false,
+                purgeMemory: Bool = false,
                 restoreBaseline: Bool = false) {
         self.lowPowerMode = lowPowerMode
         self.powerNap = powerNap
@@ -118,6 +122,7 @@ public struct ProfilePlan: Codable, Sendable {
         self.disableAppNap = disableAppNap
         self.preventIdleSleep = preventIdleSleep
         self.demoteBackgroundDaemons = demoteBackgroundDaemons
+        self.purgeMemory = purgeMemory
         self.restoreBaseline = restoreBaseline
     }
 }
@@ -130,10 +135,19 @@ public struct ProfilePlan: Codable, Sendable {
 /// si vede subito e non libera nulla di utile.
 public enum BackgroundDaemons {
     public static let names = [
+        // Indicizzazione: durante una build macina DerivedData e node_modules,
+        // cioe' esattamente le directory che stai riscrivendo.
         "mds", "mds_stores", "mdworker_shared", "mdbulkimport",
+        "corespotlightd", "suggestd", "knowledge-agent",
+        // Backup e sincronizzazione cloud.
         "backupd", "backupd-helper",
         "cloudd", "bird", "syncdefaultsd",
+        // Analisi contenuti multimediali.
         "photoanalysisd", "photolibraryd", "mediaanalysisd",
-        "suggestd", "corespotlightd", "knowledge-agent",
+        // Client di sincronizzazione di terze parti, se presenti.
+        "Dropbox", "FileProvider", "GoogleDriveFS", "OneDrive",
+        // Aggiornamenti e manutenzione differibili.
+        "softwareupdated", "SoftwareUpdateNotificationManager",
+        "AssetCacheLocatorService",
     ]
 }

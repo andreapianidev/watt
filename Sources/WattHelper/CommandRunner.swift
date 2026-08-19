@@ -13,6 +13,8 @@ enum Tool {
     static let powermetrics = "/usr/bin/powermetrics"
     static let defaultsCmd = "/usr/bin/defaults"
     static let pgrep      = "/usr/bin/pgrep"
+    static let ps         = "/bin/ps"
+    static let purge      = "/usr/sbin/purge"
 }
 
 struct CommandResult {
@@ -41,10 +43,29 @@ private final class OutputBox: @unchecked Sendable {
 }
 
 enum CommandRunner {
+
+    /// Serializza **ogni** esecuzione di comandi dell'helper.
+    ///
+    /// `fork`/`exec` concorrenti dallo stesso processo si portano dietro una
+    /// gara classica sui descrittori: mentre un figlio viene creato, eredita
+    /// gli estremi in scrittura dei pipe di un altro che sta partendo nello
+    /// stesso istante. Il lettore di quel pipe non vede mai EOF e resta
+    /// bloccato fino al timeout, con zero byte letti, anche se il comando e'
+    /// terminato regolarmente.
+    ///
+    /// Succedeva in concreto quando l'app in barra dei menu chiedeva un
+    /// campione di `powermetrics` mentre l'helper stava applicando un
+    /// profilo, cioe' lanciando `ps` e decine di `taskpolicy`. Un lock e'
+    /// sufficiente: questi comandi durano al massimo qualche secondo e non
+    /// c'e' nulla da guadagnare a sovrapporli.
+    private static let executionLock = NSLock()
+
     @discardableResult
     static func run(_ launchPath: String,
                     _ arguments: [String],
                     timeout: TimeInterval = 20) -> CommandResult {
+        executionLock.lock()
+        defer { executionLock.unlock() }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launchPath)
         process.arguments = arguments
@@ -87,8 +108,16 @@ enum CommandRunner {
         if process.isRunning {
             process.terminate()
             _ = group.wait(timeout: .now() + 2)
-            return CommandResult(status: -2, stdoutData: Data(),
-                                 stderr: "timeout dopo \(Int(timeout))s")
+            // Anche in timeout si restituisce quello che il comando ha
+            // effettivamente scritto: buttarlo via nasconde proprio il
+            // messaggio che spiega perche' si e' bloccato.
+            let partial = String(decoding: collected.stderr, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return CommandResult(
+                status: -2,
+                stdoutData: collected.stdout,
+                stderr: "timeout dopo \(Int(timeout))s"
+                      + (partial.isEmpty ? "" : " | stderr: \(partial)"))
         }
         _ = group.wait(timeout: .now() + 5)
 
@@ -98,12 +127,29 @@ enum CommandRunner {
             stderr: String(decoding: collected.stderr, as: UTF8.self))
     }
 
-    /// PID vivi per un nome di processo esatto.
-    static func pids(forProcessNamed name: String) -> [pid_t] {
-        let result = run(Tool.pgrep, ["-x", name], timeout: 5)
-        guard result.succeeded else { return [] }
-        return result.stdout
-            .split(whereSeparator: \.isNewline)
-            .compactMap { pid_t($0.trimmingCharacters(in: .whitespaces)) }
+    /// PID vivi, raggruppati per nome di processo.
+    ///
+    /// Una sola invocazione di `ps` per tutta la tabella dei processi invece
+    /// di un `pgrep` per ciascun nome cercato: con una ventina di daemon da
+    /// individuare la differenza non e' cosmetica, sono venti fork in meno e
+    /// diversi secondi risparmiati a ogni applicazione del profilo.
+    static func processTable() -> [String: [pid_t]] {
+        let result = run(Tool.ps, ["-Ac", "-o", "pid=,comm="], timeout: 10)
+        guard result.succeeded else { return [:] }
+
+        var table: [String: [pid_t]] = [:]
+        for line in result.stdout.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let space = trimmed.firstIndex(of: " "),
+                  let pid = pid_t(trimmed[trimmed.startIndex..<space])
+            else { continue }
+            // `-c` fa stampare a ps il solo nome eseguibile, senza percorso
+            // ne' argomenti: e' gia' la forma con cui confrontare.
+            let name = trimmed[trimmed.index(after: space)...]
+                .trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { continue }
+            table[name, default: []].append(pid)
+        }
+        return table
     }
 }

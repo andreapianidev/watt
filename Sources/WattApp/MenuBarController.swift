@@ -2,6 +2,12 @@ import AppKit
 import WattKit
 
 /// L'elemento in menu bar e il suo menu.
+///
+/// Due funzioni in un solo elemento: il profilo energetico e la sveglia. Si
+/// somigliano abbastanza da stare insieme (entrambe riguardano cosa il Mac
+/// puo' fare mentre lavori) e restano separate abbastanza da non
+/// interferire: la sveglia non cambia il profilo e il profilo non cambia la
+/// sveglia.
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
 
@@ -15,6 +21,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
     private var profileItems: [PowerProfile: NSMenuItem] = [:]
     private var stateItems: [NSMenuItem] = []
+    private var keepAwakeRoot = NSMenuItem()
+    private var keepAwakeItems: [NSMenuItem] = []
+    private var displayToggle = NSMenuItem()
+    private var launchItem = NSMenuItem()
+
+    /// Le voci della sveglia, nell'ordine in cui compaiono.
+    private static let awakeModes: [KeepAwake.Mode] = [
+        .off, .indefinite,
+        .duration(15 * 60), .duration(30 * 60),
+        .duration(60 * 60), .duration(2 * 60 * 60), .duration(5 * 60 * 60),
+        .whileBuilding,
+    ]
 
     init(controller: PowerController, helper: HelperConnection) {
         self.statusItem = NSStatusBar.system.statusItem(
@@ -52,7 +70,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         // Righe informative: sola lettura, riflettono lo stato reale letto
         // dal sistema e non il profilo selezionato.
-        for _ in 0..<5 {
+        for _ in 0..<4 {
             let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
@@ -60,13 +78,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        buildKeepAwakeSubmenu()
 
-        let launch = NSMenuItem(title: "Apri all'avvio",
+        let purge = NSMenuItem(title: "Libera memoria adesso",
+                               action: #selector(purgeMemory),
+                               keyEquivalent: "")
+        purge.target = self
+        purge.image = NSImage(systemSymbolName: "memorychip",
+                              accessibilityDescription: nil)
+        purge.toolTip = "Esegue purge: libera la memoria inattiva. Sfratta "
+                      + "anche la cache dei file, quindi conviene prima di "
+                      + "una build, non durante."
+        menu.addItem(purge)
+
+        menu.addItem(.separator())
+
+        launchItem = NSMenuItem(title: "Apri all'avvio",
                                 action: #selector(toggleLaunchAtLogin),
                                 keyEquivalent: "")
-        launch.target = self
-        launch.identifier = NSUserInterfaceItemIdentifier("launch")
-        menu.addItem(launch)
+        launchItem.target = self
+        menu.addItem(launchItem)
 
         let uninstall = NSMenuItem(title: "Ripristina impostazioni e rimuovi helper",
                                    action: #selector(uninstallHelper),
@@ -80,13 +111,45 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(quit)
     }
 
+    private func buildKeepAwakeSubmenu() {
+        let submenu = NSMenu()
+        for mode in Self.awakeModes {
+            let item = NSMenuItem(title: mode.label,
+                                  action: #selector(selectKeepAwake(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = Self.awakeModes.firstIndex(of: mode)
+            if mode == .whileBuilding {
+                item.toolTip = "Tiene sveglio il Mac finche' e' in esecuzione "
+                             + "xcodebuild, swift-frontend, node, cargo, make, "
+                             + "docker e simili."
+            }
+            submenu.addItem(item)
+            keepAwakeItems.append(item)
+        }
+
+        submenu.addItem(.separator())
+        displayToggle = NSMenuItem(title: "Tieni acceso anche lo schermo",
+                                   action: #selector(toggleDisplay),
+                                   keyEquivalent: "")
+        displayToggle.target = self
+        submenu.addItem(displayToggle)
+
+        keepAwakeRoot = NSMenuItem(title: "Sveglia", action: nil, keyEquivalent: "")
+        keepAwakeRoot.submenu = submenu
+        keepAwakeRoot.image = NSImage(systemSymbolName: "cup.and.saucer",
+                                      accessibilityDescription: nil)
+        menu.addItem(keepAwakeRoot)
+    }
+
     // MARK: - Rendering
 
     private func render() {
         renderStatusItem()
         renderProfileChecks()
         renderStateRows()
-        renderLaunchItem()
+        renderKeepAwake()
+        launchItem.state = Preferences.launchAtLogin ? .on : .off
     }
 
     private func renderStatusItem() {
@@ -94,9 +157,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let sample = controller.lastSample
         let pressure = sample?.thermalPressure ?? .unknown
 
-        // Quando il sistema sta limitando le prestazioni l'icona lo dice:
-        // e' l'informazione che nessuna interfaccia di sistema mostra, e il
-        // motivo principale per cui questa app esiste su un Mac senza ventola.
+        // Il throttling ha la precedenza su tutto: e' l'informazione che
+        // nessuna interfaccia di sistema mostra, ed e' il motivo principale
+        // per cui questa app esiste su un Mac senza ventola.
         let symbol = pressure.isThrottling
             ? pressure.symbolName
             : controller.profile.symbolName
@@ -104,26 +167,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                accessibilityDescription: controller.profile.title)
         button.imagePosition = .imageLeading
 
-        if let ghz = sample?.pCoreGHzText {
-            button.title = " \(ghz)"
-        } else {
-            button.title = " \(controller.profile.title)"
+        var title = sample?.pCoreGHzText ?? controller.profile.title
+        if controller.keepAwake.isActive {
+            // Marcatore compatto: con due funzioni in un solo elemento serve
+            // capire a colpo d'occhio se la sveglia e' attiva.
+            title += " ☕"
         }
+        button.title = " " + title
         button.toolTip = tooltip(sample: sample, pressure: pressure)
     }
 
     private func tooltip(sample: PowerSample?, pressure: ThermalPressure) -> String {
         var lines = ["Watt - profilo \(controller.profile.title)"]
-        if let summary = sample?.pCoreSummary {
-            lines.append("P-core: \(summary)")
-        }
+        if let summary = sample?.pCoreSummary { lines.append("P-core: \(summary)") }
         lines.append("Pressione termica: \(pressure.label)")
         if pressure.isThrottling {
             lines.append("Le prestazioni sono limitate dal calore.")
         }
-        if let error = controller.lastError {
-            lines.append("Avviso: \(error)")
-        }
+        lines.append("Sveglia: " + keepAwakeSummary())
+        if let error = controller.lastError { lines.append("Avviso: \(error)") }
         return lines.joined(separator: "\n")
     }
 
@@ -135,18 +197,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func renderStateRows() {
         let sample = controller.lastSample
-        let state = controller.lastState
         let pressure = sample?.thermalPressure ?? .unknown
 
         var rows: [(String, String)] = []
         rows.append(("Termico", pressure.label
-            + (pressure.isThrottling ? "  - prestazioni limitate" : "")))
+            + (pressure.isThrottling ? "  - limitato" : "")))
         rows.append(("P-core", sample?.pCoreSummary ?? "n/d"))
         rows.append(("Pacchetto", sample?.packageWattsText ?? "n/d"))
-        rows.append(("Low Power Mode",
-                     state.map { $0.lowPowerMode ? "attivo" : "spento" } ?? "n/d"))
-        rows.append(("Spotlight",
-                     state.map { $0.spotlightIndexing ? "attivo" : "in pausa" } ?? "n/d"))
+        rows.append(("Memoria disponibile",
+                     controller.memory?.availableText ?? "n/d"))
 
         for (index, item) in stateItems.enumerated() {
             guard index < rows.count else { item.isHidden = true; continue }
@@ -156,19 +215,55 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    private func renderKeepAwake() {
+        keepAwakeRoot.title = "Sveglia: " + keepAwakeSummary()
+        keepAwakeRoot.image = NSImage(
+            systemSymbolName: controller.keepAwake.isActive
+                ? "cup.and.saucer.fill" : "cup.and.saucer",
+            accessibilityDescription: nil)
+
+        for (index, item) in keepAwakeItems.enumerated() {
+            item.state = (Self.awakeModes[index] == controller.keepAwake.mode)
+                ? .on : .off
+        }
+        displayToggle.state = controller.keepAwake.keepDisplayOn ? .on : .off
+    }
+
+    /// Descrizione della sveglia che dice anche *perche'* e' attiva: in
+    /// modalita' build, quale processo la sta tenendo su, e a tempo, quanto
+    /// manca.
+    private func keepAwakeSummary() -> String {
+        let awake = controller.keepAwake
+        switch awake.mode {
+        case .off:
+            return "disattivata"
+        case .indefinite:
+            return "sempre attiva"
+        case .duration:
+            guard let remaining = awake.remaining, remaining > 0 else {
+                return "scaduta"
+            }
+            let minutes = Int(remaining / 60) + 1
+            return minutes >= 60
+                ? String(format: "%dh %02dm", minutes / 60, minutes % 60)
+                : "\(minutes) min"
+        case .whileBuilding:
+            if let process = awake.detectedProcess { return "build (\(process))" }
+            return "in attesa di una build"
+        }
+    }
+
     /// Etichetta a sinistra, valore a destra in grigio: la stessa forma dei
     /// menu di sistema, ottenuta con un tab stop invece che con spazi, cosi'
     /// le colonne restano allineate a qualunque larghezza.
     private static func row(label: String, value: String) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: 240)]
+        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: 260)]
 
         let attributed = NSMutableAttributedString(
             string: label + "\t",
-            attributes: [
-                .font: NSFont.menuFont(ofSize: 0),
-                .paragraphStyle: paragraph,
-            ])
+            attributes: [.font: NSFont.menuFont(ofSize: 0),
+                         .paragraphStyle: paragraph])
         attributed.append(NSAttributedString(
             string: value,
             attributes: [
@@ -180,28 +275,45 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return attributed
     }
 
-    private func renderLaunchItem() {
-        guard let item = menu.items.first(where: {
-            $0.identifier?.rawValue == "launch"
-        }) else { return }
-        item.state = Preferences.launchAtLogin ? .on : .off
-    }
-
     // MARK: - Azioni
 
     @objc private func selectProfile(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let profile = PowerProfile(rawValue: raw) else { return }
-
-        if case .needsApproval = helper.installState {
-            presentApprovalRequest()
-        }
         controller.apply(profile)
+    }
+
+    @objc private func selectKeepAwake(_ sender: NSMenuItem) {
+        guard let index = sender.representedObject as? Int,
+              index < Self.awakeModes.count else { return }
+        controller.setKeepAwake(Self.awakeModes[index])
+    }
+
+    @objc private func toggleDisplay() {
+        controller.setKeepDisplayOn(!controller.keepAwake.keepDisplayOn)
+    }
+
+    @objc private func purgeMemory() {
+        let before = controller.memory?.availableBytes ?? 0
+        controller.purgeMemory { [weak self] failure in
+            guard let self else { return }
+            if let failure {
+                self.presentError("Memoria non liberata", detail: failure)
+                return
+            }
+            let after = self.controller.memory?.availableBytes ?? 0
+            // Il guadagno si mostra solo se c'e' stato: un avviso che
+            // annuncia "liberati 0,00 GB" e' peggio di nessun avviso.
+            if after > before {
+                let freed = MemoryReader.Snapshot.gigabytes(after - before)
+                self.statusItem.button?.toolTip = "Watt - liberati \(freed)"
+            }
+        }
     }
 
     @objc private func toggleLaunchAtLogin() {
         Preferences.launchAtLogin.toggle()
-        renderLaunchItem()
+        launchItem.state = Preferences.launchAtLogin ? .on : .off
     }
 
     @objc private func uninstallHelper() {
@@ -224,24 +336,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    @objc private func quit() {
-        NSApp.terminate(nil)
-    }
-
-    private func presentApprovalRequest() {
-        let alert = NSAlert()
-        alert.messageText = "Watt ha bisogno della tua approvazione"
-        alert.informativeText =
-            "L'helper che applica le modifiche e legge i consumi va abilitato "
-            + "in Impostazioni di Sistema, in Generali - Elementi login ed "
-            + "estensioni. Finche' non lo abiliti, restano attivi solo i "
-            + "cambiamenti che non richiedono privilegi."
-        alert.addButton(withTitle: "Apri Impostazioni di Sistema")
-        alert.addButton(withTitle: "Piu' tardi")
-        if alert.runModal() == .alertFirstButtonReturn {
-            helper.openLoginItemsSettings()
-        }
-    }
+    @objc private func quit() { NSApp.terminate(nil) }
 
     private func presentError(_ title: String, detail: String) {
         let alert = NSAlert()
@@ -257,6 +352,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         poller.setForeground(true)
         controller.refreshState()
+        // I watt costano un powermetrics: si chiedono solo mentre qualcuno
+        // sta effettivamente guardando il menu.
+        controller.refreshPower()
     }
 
     func menuDidClose(_ menu: NSMenu) {
