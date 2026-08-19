@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.andreapiani.watt.helper</string>
+
+    <!-- Percorso relativo al bundle dell'app: SMAppService lo risolve da se',
+         quindi l'helper non va copiato in /Library/PrivilegedHelperTools. -->
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/watt-helper</string>
+
+    <!-- Avvio su richiesta alla prima connessione XPC. Non c'e' RunAtLoad:
+         un demone root che parte al boot e resta acceso a vuoto e' superficie
+         d'attacco senza contropartita. -->
+    <key>MachServices</key>
+    <dict>
+        <key>dev.andreapiani.watt.helper</key>
+        <true/>
+    </dict>
+
+    <!-- Lega il demone all'app nell'interfaccia di Impostazioni di Sistema:
+         l'utente vede "Watt", non un identificatore criptico. -->
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>dev.andreapiani.watt</string>
+    </array>
+</dict>
+</plist>
