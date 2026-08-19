@@ -2,364 +2,390 @@
 
 # ⚡ Watt
 
-**Monitor termico e profili energetici per Mac Apple Silicon senza ventola.**
+**Open-source thermal monitor and power profiles for fanless Apple Silicon Macs.**
 
-Ti dice quando il Mac sta rallentando per il calore — e quanto —
-invece di lasciartelo scoprire aspettando.
+Tells you when your Mac is throttling — and by how much —
+instead of letting you find out by waiting.
 
 ![macOS](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)
 ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-M1%20%C2%B7%20M2%20%C2%B7%20M3%20%C2%B7%20M4-0071e3)
 ![Swift](https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white)
-![Licenza](https://img.shields.io/badge/licenza-MIT-3fb950)
-![Dipendenze](https://img.shields.io/badge/dipendenze-nessuna-8957e5)
+![License](https://img.shields.io/badge/license-MIT-3fb950)
+![Dependencies](https://img.shields.io/badge/dependencies-none-8957e5)
+
+[Italiano](README.it.md) · [Installation](#installation) · [Benchmarks](#-benchmarks-measured-on-a-macbook-air-m2) · [How it reads data](#-how-it-reads-data)
 
 </div>
 
 ```
 ┌──────────────────────────────────────┐
-│ ⚠️ 1.19 GHz · 91°           ← in barra│
+│ ⚠️ 1.19 GHz · 91°        ← menu bar  │
 ├──────────────────────────────────────┤
-│  PRESTAZIONI LIMITATE   34% del max  │
-│  Temperatura SoC              91 °C  │
-│  P-core            1.19 di 3.50 GHz  │
-│  Pacchetto                    3.5 W  │
-│  Memoria disponibile         2.4 GB  │
-│  Batteria / SSD          39° / 46°   │
+│  THROTTLED BY HEAT       34% of max  │
+│  SoC temperature              91 °C  │
+│  P-cores           1.19 of 3.50 GHz  │
+│  Package                      3.5 W  │
+│  Memory available            2.4 GB  │
+│  Battery / SSD           39° / 46°   │
 ├──────────────────────────────────────┤
 │      ╭─────────────────────────╮     │
-│      │  ╱╲    grafico 20 min   │     │
-│      │ ╱  ╲___╱╲___ max        │     │
-│      │╱─────────── media       │     │
+│      │  ╱╲     last 20 min     │     │
+│      │ ╱  ╲___╱╲___ peak       │     │
+│      │╱─────────── average     │     │
 │      ╰─────────────────────────╯     │
 ├──────────────────────────────────────┤
-│  ● Risparmio  Automatico             │
-│    Prestazioni  Massimo              │
+│  ● Low   Automatic                   │
+│    High  Maximum                     │
 ├──────────────────────────────────────┤
-│  Sveglia: durante le build (cargo)   │
-│  Congela i servizi differibili       │
-│  Tutti i sensori              ▸      │
+│  Keep awake: while building (cargo)  │
+│  Freeze deferrable services          │
+│  All sensors                  ▸      │
 └──────────────────────────────────────┘
 ```
 
 ---
 
-## Installazione
+## Why this exists
+
+MacBook Pros have an **Energy Mode** selector. MacBook Airs don't, because
+High Power Mode raises the fan RPM ceiling — and a fanless Mac has no fan to
+raise.
+
+So Watt does the useful thing that *is* possible: it shows you the wall you
+keep hitting, and removes the contention you can actually remove. Every claim
+below is measured, including the one that says a profile does nothing.
+
+### Compared to what's out there
+
+| | Watt | TG Pro | Stats | Amphetamine |
+|:--|:-:|:-:|:-:|:-:|
+| Temperature sensors | ✅ | ✅ | ✅ | — |
+| **Throttle detection with % of ceiling** | ✅ | — | — | — |
+| **P/E-core frequency vs silicon ceiling** | ✅ | — | ✅ | — |
+| Power profiles | ✅ | — | — | — |
+| **Freeze background services** | ✅ | — | — | — |
+| Keep awake | ✅ | — | — | ✅ |
+| **While-a-build-runs keep awake** | ✅ | — | — | — |
+| **Scriptable CLI** | ✅ | — | — | ✅ |
+| Fan control | n/a | ✅ | — | — |
+| Price | free, MIT | paid | free | paid |
+
+TG Pro's fan control is genuinely useful on Macs that *have* fans — Watt does
+not replace it there. On a fanless Air there is nothing to control, and
+that's the machine Watt is built for.
+
+---
+
+## Installation
 
 ```bash
 git clone https://github.com/andreapianidev/watt.git && cd watt
-./scripts/build.sh                          # compila e firma
+./scripts/build.sh                          # build and sign
 sudo cp -R build/Watt.app /Applications/
-sudo ./scripts/install-helper.sh            # registra l'helper privilegiato
+sudo ./scripts/install-helper.sh            # register the privileged helper
 open -a /Applications/Watt.app
 ```
 
-> Va aperta con `open`, non eseguendo il binario da terminale: in quel caso
-> Background Task Management attribuisce la richiesta alla shell e la
-> registrazione del demone fallisce con un opaco `Operation not permitted`.
+> Launch it with `open`, not by running the binary from a terminal: otherwise
+> Background Task Management attributes the request to your shell and daemon
+> registration fails with an opaque `Operation not permitted`.
 
 ---
 
-## 🌡 Cosa fa
+## 🌡 What it does
 
 | | |
 |:--|:--|
-| **Temperature in tempo reale** | 39 sensori, cadenza scelta da te fra 1 e 10 secondi, con il costo in CPU dichiarato accanto a ciascuna voce |
-| **Avviso di throttling** | quando il sistema limita, l'icona diventa rossa e mostra a che percentuale del massimo stai girando |
-| **Grafico** | massima e media degli ultimi venti minuti, con la soglia di allerta tracciata |
-| **Notifiche** | soglia a 80, 85, 90 o 95 °C, con isteresi e pausa perché non diventino rumore |
-| **Quattro profili energetici** | dal risparmio reale al confinamento dei servizi in background |
-| **Sospensione servizi** | congela con `SIGSTOP` indicizzazione, backup e analisi foto — riprendono da dove erano |
-| **Sveglia** | come Amphetamine, con in più una modalità *finché dura la build* |
-| **Riga di comando** | `Watt --run massimo -- xcodebuild …` avvolge una build e ripristina da solo |
+| **Live temperatures** | 39 sensors, refresh rate you pick between 1 and 10 seconds, with the CPU cost printed next to each option |
+| **Throttle warning** | when the system limits performance the icon turns red and shows what fraction of the ceiling you're actually getting |
+| **Chart** | peak and average over the last twenty minutes, with your alert threshold drawn in |
+| **Notifications** | threshold at 80, 85, 90 or 95 °C, with hysteresis and a quiet period so they don't become noise |
+| **Four power profiles** | from real power saving to freezing background services |
+| **Service suspension** | `SIGSTOP` on indexing, backups and photo analysis — they resume exactly where they left off |
+| **Keep awake** | Amphetamine-style, plus a *while a build is running* mode |
+| **CLI** | `Watt --run maximum -- xcodebuild …` wraps a build and restores the previous profile itself |
 
-Nessuna dipendenza esterna, nessun framework di terze parti, ~2.700 righe di Swift.
+No external dependencies, no third-party frameworks, ~2,700 lines of Swift.
 
 ---
 
-## 📊 I numeri, misurati su un MacBook Air M2
+## 📊 Benchmarks, measured on a MacBook Air M2
 
-Tutto quello che segue è riproducibile con gli script nel repository.
-Nessuno di questi numeri è stimato.
+Everything below is reproducible with the scripts in this repository.
+None of these numbers is estimated.
 
-### Il muro termico
+### The thermal wall
 
-Otto processi in busy-loop, campionamento ogni 15 secondi
+Eight busy-loop processes, sampled every 15 seconds
 (`./scripts/thermal-curve.sh`):
 
-| t | P-core | E-core | Pacchetto |
+| t | P-cores | E-cores | Package |
 |--:|--:|--:|--:|
-| 0 s | **3143 MHz** | 2424 MHz | 18,5 W |
-| 60 s | 2675 MHz | 2423 MHz | 12,8 W |
-| 90 s | 1379 MHz | 2422 MHz | 5,1 W |
-| 135 s | **1188 MHz** | 2419 MHz | 3,5 W |
+| 0 s | **3143 MHz** | 2424 MHz | 18.5 W |
+| 60 s | 2675 MHz | 2423 MHz | 12.8 W |
+| 90 s | 1379 MHz | 2422 MHz | 5.1 W |
+| 135 s | **1188 MHz** | 2419 MHz | 3.5 W |
 
-**−62% di clock in 90 secondi.** E gli E-core non throttlano mai: sotto
-pressione termica l'M2 sacrifica i P-core e protegge gli E-core.
+**−62% clock in 90 seconds.** And the E-cores never throttle: under thermal
+pressure the M2 sacrifices P-cores and protects E-cores.
 
-### I profili servono davvero?
+### Do the profiles actually help?
 
-Stesso lavoro, tre ripetizioni alternate per annullare la deriva termica:
+Same workload, three interleaved repetitions to cancel thermal drift:
 
-| profilo | mediana | differenza |
+| profile | median | delta |
 |:--|--:|--:|
-| Automatico | 6,66 s | — |
-| **Massimo** | 6,65 s | **+0,1%** |
-| **Risparmio** | 10,68 s | **−60%** |
+| Automatic | 6.66 s | — |
+| **Maximum** | 6.65 s | **+0.1%** |
+| **Low power** | 10.68 s | **−60%** |
 
-A macchina scarica **Massimo non dà nulla**, e va detto. L'unico profilo che
-sposta il clock è Risparmio, e lo sposta all'ingiù.
+On an idle machine **Maximum does nothing**, and that needs saying. The only
+profile that moves the clock is Low Power, and it moves it down.
 
-### Dove invece si guadagna
+### Where the gain actually is
 
-Sei processi in competizione, con controprova:
+Six competing processes, with a control run:
 
-| | tempo |
+| | time |
 |:--|--:|
-| macchina libera | 7,36 s |
-| sei processi in competizione | 12,48 s |
-| **declassati** con `taskpolicy -b` | 8,51 s |
-| **congelati** con `SIGSTOP` | **6,66 s** — pari alla macchina libera |
-| controprova, di nuovo attivi | 12,01 s |
+| idle machine | 7.36 s |
+| six competing processes | 12.48 s |
+| **deprioritized** via `taskpolicy -b` | 8.51 s |
+| **frozen** via `SIGSTOP` | **6.66 s** — same as idle |
+| control: competing again | 12.01 s |
 
-Congelare riporta esattamente ai tempi della macchina libera. La CPU dei
-processi congelati, misurata, è **0,0%**.
+Freezing returns you to idle-machine timings exactly. Measured CPU of the
+frozen processes: **0.0%**.
 
-### Si può overclockare?
+### Can you overclock it?
 
-No, e non è una questione di permessi.
+No — and it isn't a permissions problem.
 
-| tentativo | esito |
+| attempt | result |
 |:--|:--|
-| `sysctl hw.cpufrequency` | vuoto su Apple Silicon, esiste solo su Intel |
-| `kern.sched_recommended_cores` | sola lettura |
-| scrittura tabelle DVFS in IORegistry | `kIOReturnUnsupported`, **identico da root** |
-| `taskpolicy -t 0` (tier massimo) | 6,629 s contro i 6,633 s del default |
+| `sysctl hw.cpufrequency` | empty on Apple Silicon, Intel-only |
+| `kern.sched_recommended_cores` | read-only |
+| writing DVFS tables via IORegistry | `kIOReturnUnsupported`, **identical as root** |
+| `taskpolicy -t 0` (highest tier) | 6.629 s vs 6.633 s at default |
 
-**Il default è già il massimo.** Si può solo scendere — fino a 3,8× più lenti
-con `taskpolicy -b`.
+**The default already is the maximum.** You can only go down — as far as 3.8×
+slower with `taskpolicy -b`.
 
 ---
 
-## Perché High Power Mode non esiste su questi Mac
+## Why High Power Mode can't be ported
 
 ```console
 $ pmset -a highpowermode 1
-Usage: pmset <options>        ← rifiutato al parsing, non "permission denied"
+Usage: pmset <options>        ← rejected at argument parsing, not "permission denied"
 ```
 
-`pmset` scarta l'opzione **prima** di controllare i privilegi: non è
-registrata come valida su hardware senza ventola. `IOPMrootDomain` conferma —
-`Supported Features` elenca `Hibernation`, `AdaptiveDimming`, wake-on-LAN, e
-nessuna modalità prestazionale.
-
-Il motivo è fisico: High Power Mode alza il tetto di RPM della ventola e il
-limite termico. Su una macchina fanless non c'è niente da alzare.
+`pmset` discards the option **before** checking privileges: it isn't
+registered as valid on fanless hardware. `IOPMrootDomain` confirms it —
+`Supported Features` lists `Hibernation`, `AdaptiveDimming`, wake-on-LAN, and
+no performance mode at all.
 
 ---
 
-## I quattro profili
+## The four profiles
 
-| | Risparmio | Automatico | Prestazioni | Massimo |
+| | Low | Automatic | High | Maximum |
 |:--|:-:|:-:|:-:|:-:|
 | `pmset lowpowermode` | **1** | baseline | 0 | 0 |
 | `pmset powernap` | 0 | baseline | 0 | 0 |
-| Spotlight | — | baseline | pausa | pausa |
-| Time Machine | — | baseline | pausa | pausa |
+| Spotlight | — | baseline | paused | paused |
+| Time Machine | — | baseline | paused | paused |
 | App Nap | — | — | off | off |
-| Sospensione inibita | — | — | ✓ | ✓ |
-| Daemon sugli E-core | — | — | — | ✓ |
-| Servizi congelati | — | — | — | ✓ |
-| `purge` memoria | — | — | — | ✓ |
+| Sleep prevented | — | — | ✓ | ✓ |
+| Daemons on E-cores | — | — | — | ✓ |
+| Services frozen | — | — | — | ✓ |
+| Memory `purge` | — | — | — | ✓ |
 
-Solo **una** riga tocca la frequenza: `lowpowermode`. Tutte le altre tolgono
-lavoro concorrente — ed è il motivo per cui a macchina scarica non cambiano
-niente.
+Only **one** row touches frequency: `lowpowermode`. Every other row removes
+competing work — which is exactly why they change nothing on an idle machine.
 
-*Automatico* non è un profilo neutro: ripristina esattamente lo stato
-registrato alla prima esecuzione. Se Spotlight era già spento prima di
-installare Watt, Watt non lo riaccende.
+*Automatic* is not a neutral profile: it restores the exact state recorded on
+first run. If Spotlight was already off before you installed Watt, Watt will
+not turn it back on.
 
 ---
 
-## 🔬 Come legge i dati
+## 🔬 How it reads data
 
-Il numero in barra **non** viene da `powermetrics`. `powermetrics` è solo un
-client di **IOReport**, l'API IOKit che espone i contatori del silicio, e
-Watt la interroga direttamente.
+The number in your menu bar does **not** come from `powermetrics`.
+`powermetrics` is itself just a client of **IOReport**, the IOKit API that
+exposes the silicon's counters — Watt queries it directly.
 
-| dato | fonte | privilegi |
+| data | source | privileges |
 |:--|:--|:--|
-| Frequenza P/E-core | IOReport, `CPU Complex Performance States` | nessuno |
-| Tetto DVFS | nodo `pmgr` del registro IO, `voltage-states` | nessuno |
-| Temperature | servizi HID nella pagina Apple Vendor | nessuno |
-| Pressione termica | `ProcessInfo.thermalState` | nessuno |
-| Memoria | `host_statistics64` | nessuno |
-| Watt del package | `powermetrics`, solo a menu aperto | root |
-| Applicare i profili | `pmset`, `mdutil`, `tmutil`, `taskpolicy`, `purge` | root |
+| P/E-core frequency | IOReport, `CPU Complex Performance States` | none |
+| DVFS ceiling | `pmgr` node in IORegistry, `voltage-states` | none |
+| Temperatures | HID services in the Apple Vendor usage page | none |
+| Thermal pressure | `ProcessInfo.thermalState` | none |
+| Memory | `host_statistics64` | none |
+| Package watts | `powermetrics`, only while the menu is open | root |
+| Applying profiles | `pmset`, `mdutil`, `tmutil`, `taskpolicy`, `purge` | root |
 
-Conseguenze concrete:
+What this buys you:
 
-- **nessun processo lanciato a ogni campione**, e quindi nessuna delle gare
-  sui descrittori dei pipe che affliggono chi fa `fork`/`exec` in concorrenza;
-- **le letture funzionano anche con l'helper disinstallato**;
-- il tetto DVFS non è inchiodato nel codice: su un M2 restituisce 3504 e 2424
-  MHz, su un altro Apple Silicon restituirà i suoi.
+- **no process spawned per sample**, and therefore none of the file-descriptor
+  races that plague concurrent `fork`/`exec`;
+- **readings keep working with the helper uninstalled**;
+- the DVFS ceiling isn't hardcoded: an M2 reports 3504 and 2424 MHz, another
+  Apple Silicon chip reports its own.
 
-Le frequenze si ricavano dalle residenze per stato DVFS, escludendo gli stati
-di riposo: la domanda a cui la barra risponde è *a che velocità gira quando
-lavora*, non *quanto ha lavorato*.
+Frequencies are derived from per-state DVFS residencies with idle states
+excluded: the question a menu bar answers is *how fast is it running when it
+works*, not *how much did it work*.
 
-I simboli IOReport e IOHID non sono dichiarati in header pubblici e si
-risolvono a runtime: se un aggiornamento di macOS li spostasse, Watt perde
-quelle letture e continua a funzionare invece di crollare.
+The IOReport and IOHID symbols aren't declared in public headers and are
+resolved at runtime — if a macOS update moved them, Watt loses those readings
+and keeps running instead of crashing.
 
 ---
 
-## 🌡 Temperature
+## 🌡 Temperatures
 
-| famiglia | sensori |
+| family | sensors |
 |:--|:--|
-| **SoC** | `PMU tdie1..8`, `PMU2 tdie1..8` — i più caldi |
-| **Alimentazione** | `PMU tdev*`, `tcal` |
-| **Archiviazione** | `NAND CH*` |
-| **Batteria** | `gas gauge battery` |
+| **SoC** | `PMU tdie1..8`, `PMU2 tdie1..8` — the hottest ones |
+| **Power** | `PMU tdev*`, `tcal` |
+| **Storage** | `NAND CH*` |
+| **Battery** | `gas gauge battery` |
 
-Il menu mostra il **massimo** fra i sensori `tdie`, non la media: è il punto
-più caldo a decidere quando il sistema limita.
+The menu shows the **maximum** across `tdie` sensors, not the average: it's
+the hottest point that decides when the system starts limiting you.
 
-**Costo, misurato:** leggere tutti e 39 i sensori richiede 52 ms, i soli 16
-sul die 17 ms. La barra legge solo questi ultimi; l'elenco completo si legge
-quando lo apri. A un aggiornamento al secondo sono ~1,7% di un core, e la
-voce di menu lo scrive accanto a ciascuna cadenza invece di nasconderlo.
-
----
-
-## ☕ Sveglia
-
-Come Amphetamine: sempre attiva, a tempo (15 min → 5 ore), oppure **finché
-dura una build** — resta sveglio finché è in esecuzione `xcodebuild`,
-`swift-frontend`, `cargo`, `ninja`, `ffmpeg` e simili, e lascia dormire il
-Mac appena finiscono. Il menu mostra *quale* processo la sta tenendo attiva.
-
-La lista è deliberatamente ristretta a strumenti inequivocabili: includere
-`python3` o `node` significherebbe non addormentarsi mai su una macchina da
-sviluppo, che è l'opposto dello scopo.
-
-Usa `IOPMAssertion`, che il kernel rilascia da sé quando il processo termina,
-anche per crash o `kill -9`.
+**Measured cost:** reading all 39 sensors takes 52 ms, the 16 die sensors
+alone take 17 ms. The menu bar reads only the latter; the full list is read
+when you open it. At one refresh per second that's ~1.7% of a core, and the
+menu prints that next to each refresh rate rather than hiding it.
 
 ---
 
-## ⌨️ Riga di comando
+## ☕ Keep awake
 
-L'app **è** anche la CLI, pensata per gli script di build:
+Amphetamine-style: always on, timed (15 min → 5 hours), or **while a build is
+running** — stays awake as long as `xcodebuild`, `swift-frontend`, `cargo`,
+`ninja`, `ffmpeg` and friends are alive, and lets the Mac sleep the moment
+they finish. The menu shows *which* process is holding it awake.
+
+That list is deliberately narrow. Including `python3` or `node` would mean
+never sleeping on a development machine, which is the opposite of the point.
+
+It uses `IOPMAssertion`, which the kernel releases on process exit — including
+a crash or `kill -9`.
+
+---
+
+## ⌨️ Command line
+
+The app **is** the CLI, built for build scripts:
 
 ```bash
-Watt --status                  # frequenze, temperature, stato
-Watt --temps                   # tutti i sensori, dal più caldo
-Watt --apply massimo           # applica un profilo
-Watt --suspend / --resume      # congela i servizi differibili
-Watt --throttle / --unthrottle # rallenta i background che consumano
-Watt --purge                   # libera la memoria inattiva
-Watt --login on                # apertura automatica all'accesso
-Watt --uninstall               # ripristina tutto e deregistra
+Watt --status                  # frequency, temperatures, state
+Watt --temps                   # every sensor, hottest first
+Watt --apply maximum           # apply a profile
+Watt --suspend / --resume      # freeze deferrable services
+Watt --throttle / --unthrottle # deprioritize heavy background processes
+Watt --purge                   # free inactive memory
+Watt --login on                # open at login
+Watt --uninstall               # restore everything and unregister
 
-# La più utile: applica, esegue, ripristina il profilo precedente
-Watt --run massimo -- xcodebuild -scheme App build
+# The useful one: apply, run, restore the previous profile
+Watt --run maximum -- xcodebuild -scheme App build
 ```
 
-`--run` ripristina anche se il comando fallisce o viene interrotto: uno
-script morto a metà non deve lasciarti un Mac con l'indicizzazione in pausa.
+`--run` restores even if the command fails or is interrupted: a script that
+died halfway shouldn't leave you with indexing paused.
 
 ---
 
-## 🔐 Come è fatto
+## 🔐 How it's built
 
 ```
 Watt.app
-├─ Contents/MacOS/Watt              app AppKit (LSUIElement) + modalità CLI
-├─ Contents/MacOS/watt-helper       demone root, on-demand via launchd
-└─ Contents/Library/LaunchDaemons/  per la registrazione via SMAppService
+├─ Contents/MacOS/Watt              AppKit app (LSUIElement) + CLI mode
+├─ Contents/MacOS/watt-helper       root daemon, on-demand via launchd
+└─ Contents/Library/LaunchDaemons/  for SMAppService registration
 ```
 
-Scelte che vale la pena conoscere prima di leggere il codice:
+Decisions worth knowing before reading the code:
 
-- **L'helper verifica chi lo chiama.** Ogni connessione XPC è validata contro
-  un requisito di codesign usando l'*audit token*, non il PID: i PID sono
-  riciclabili e un controllo basato su di essi è aggirabile. Se il token non
-  è leggibile la connessione viene rifiutata, mai accettata «nel dubbio».
-- **Ogni modifica è reversibile.** Alla prima esecuzione l'helper fotografa
-  lo stato del sistema in `/Library/Application Support/Watt/baseline.json` e
-  non lo sovrascrive più.
-- **Le sospensioni scadono.** Trenta minuti, dopo i quali i servizi si
-  riattivano da soli. Se Watt muore mentre li tiene fermi, nessuno
-  collegherebbe mai Spotlight che non indicizza a un'app chiusa il giorno
-  prima.
-- **Non si tocca mai nulla che abbia un'interfaccia.** L'elenco dei PID
-  protetti arriva dall'app; l'helper da solo non potrebbe distinguere Xcode
-  che compila da un daemon che indicizza.
-- **L'helper serializza ogni comando.** `fork`/`exec` concorrenti dallo stesso
-  processo producono una gara sui descrittori: un figlio eredita l'estremo in
-  scrittura del pipe di un altro, e il lettore attende un EOF che non arriva.
-- **La sospensione usa `IOPMAssertion`, non `pmset disablesleep`**, che
-  sopravvivrebbe a un crash lasciando un Mac che non dorme più.
+- **The helper verifies its caller.** Every XPC connection is validated
+  against a codesign requirement using the *audit token*, not the PID: PIDs
+  get recycled, and a PID-based check is defeatable. If the token can't be
+  read the connection is refused — never accepted "just in case".
+- **Every change is reversible.** On first run the helper snapshots system
+  state into `/Library/Application Support/Watt/baseline.json` and never
+  overwrites it.
+- **Suspensions expire.** Thirty minutes, after which services resume by
+  themselves. If Watt dies while holding them, nobody would ever connect
+  "Spotlight stopped indexing" to an app they quit yesterday.
+- **Nothing with a user interface is ever touched.** The list of protected
+  PIDs comes from the app; the helper alone couldn't tell Xcode compiling
+  from a daemon indexing.
+- **The helper serializes every command.** Concurrent `fork`/`exec` from one
+  process races on file descriptors: a child inherits another child's pipe
+  write end, and the reader waits on an EOF that never comes.
+- **Sleep is prevented with `IOPMAssertion`, not `pmset disablesleep`**, which
+  would survive a crash and leave a Mac that never sleeps.
 
-### Compilare
+### Building
 
 ```bash
-./scripts/build.sh                                  # identità automatica
-./scripts/build.sh "Developer ID Application: ..."  # identità esplicita
-WATT_UNSIGNED=1 ./scripts/build.sh                  # ad-hoc, solo per compilare
+./scripts/build.sh                                  # auto-detect identity
+./scripts/build.sh "Developer ID Application: ..."  # explicit identity
+WATT_UNSIGNED=1 ./scripts/build.sh                  # ad-hoc, build only
 ```
 
-Il Team ID del requisito di codesign viene letto **dalla firma reale**, non
-dal nome del certificato: in un'identità *Apple Development* il valore fra
-parentesi è l'ID personale dello sviluppatore e differisce dal team. Usarlo
-produce un requisito che nessuna firma potrà soddisfare, e l'helper
-rifiuterebbe la propria stessa app senza dire perché.
+The Team ID in the codesign requirement is read **from the actual signature**,
+not from the certificate's name: in an *Apple Development* identity the value
+in parentheses is the developer's personal ID and differs from the team. Using
+it produces a requirement no signature can ever satisfy, and the helper would
+reject its own app without saying why.
 
-### Diagnostica
+### Diagnostics
 
 ```bash
-./scripts/thermal-curve.sh [campioni] [intervallo]  # misura il throttling
-watt-helper --sample                                # campiona come via XPC
-watt-helper --parse campione.plist                  # verifica il parser
-WATT_DEBUG=1 sudo ./scripts/install-helper.sh       # stderr su file
+./scripts/thermal-curve.sh [samples] [interval]  # measure throttling
+watt-helper --sample                             # sample as it would over XPC
+watt-helper --parse sample.plist                 # verify the parser
+WATT_DEBUG=1 sudo ./scripts/install-helper.sh    # stderr to a file
 ```
 
 ---
 
-## Disinstallare
+## Uninstalling
 
 ```bash
-Watt --uninstall                    # ripristina la baseline e deregistra
-sudo ./scripts/uninstall-helper.sh  # rimuove il demone
+Watt --uninstall                    # restore baseline and unregister
+sudo ./scripts/uninstall-helper.sh  # remove the daemon
 ```
 
-Farlo **prima** di cestinare l'app: altrimenti Spotlight resta in pausa senza
-più un'interfaccia per riattivarlo.
+Do this **before** trashing the app, or Spotlight stays paused with no
+interface left to turn it back on.
 
 ---
 
-## ⚠️ Limiti noti
+## ⚠️ Known limits
 
-- **Nessun profilo sposta il limite termico.** Su un Mac senza ventola non
-  esiste software che lo faccia, e questo è il fattore che domina tutti gli
-  altri: essere caldi costa il 37%, il miglior profilo lo 0,1%.
-- Il rallentamento mirato è stato **provato con processi sintetici**, non
-  durante una build reale.
-- `purge` libera circa 1 GB in 1,3 s, ma **il beneficio su una build non è
-  dimostrato**: sfratta anche la cache dei file.
-- `tmutil enable/disable` può richiedere Accesso completo al disco anche a
-  root. Watt lo riporta come errore invece di fingere successo.
-- `NSAppSleepDisabled` vale per i processi lanciati **dopo** il cambio.
-- Provato solo su MacBook Air M2 (`Mac14,15`) con macOS 27.
+- **No profile moves the thermal wall.** On a fanless Mac no software can, and
+  it dominates everything else: running hot costs 37%, the best profile 0.1%.
+- Targeted throttling was **tested with synthetic processes**, not during a
+  real build.
+- `purge` frees about 1 GB in 1.3 s, but **its benefit to a build is
+  unproven**: it also evicts the file cache.
+- `tmutil enable/disable` may require Full Disk Access even as root. Watt
+  reports the failure instead of faking success.
+- `NSAppSleepDisabled` applies to processes launched **after** the change.
+- Tested only on a MacBook Air M2 (`Mac14,15`) running macOS 27.
 
 ---
 
-## Licenza
+## License
 
-MIT — vedi [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
 
 <div align="center">
 <sub>
