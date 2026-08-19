@@ -80,3 +80,55 @@ public enum ProtectedProcesses {
     /// allunga soltanto l'elenco di ciò che hai modificato.
     public static let minimumCPUPercent: Double = 3
 }
+
+
+/// Servizi che possono essere **congelati** con SIGSTOP, non solo declassati.
+///
+/// Un processo fermato con SIGSTOP consuma esattamente zero: non viene mai
+/// schedulato finché non riceve SIGCONT. È molto più efficace di
+/// `taskpolicy -b`, che si limita a spostarlo in coda, ed è altrettanto
+/// reversibile — ma solo se si sceglie bene cosa fermare.
+///
+/// La lista contiene esclusivamente lavoro **differibile e senza dipendenze
+/// dall'interfaccia**: indicizzazione, analisi foto, backup, aggiornamenti.
+/// Se uno di questi resta fermo dieci minuti non se ne accorge nessuno, e
+/// riprende esattamente da dove era rimasto.
+///
+/// Sono deliberatamente **esclusi** i servizi iCloud (`cloudd`, `bird`,
+/// `FileProvider`): il Finder può bloccarsi in attesa di una risposta da
+/// loro, e un Finder congelato è indistinguibile da un Mac rotto.
+public enum SuspendableServices {
+    public static let names: [String] = [
+        // Indicizzazione Spotlight.
+        "mds", "mds_stores", "mdworker_shared", "mdbulkimport",
+        "corespotlightd", "suggestd", "knowledge-agent",
+        // Analisi della libreria foto.
+        "photoanalysisd", "photolibraryd", "mediaanalysisd",
+        // Backup.
+        "backupd", "backupd-helper",
+        // Aggiornamenti e cache differibili.
+        "softwareupdated", "AssetCacheLocatorService",
+    ]
+
+    /// Oltre questo tempo i servizi vengono riattivati da soli.
+    ///
+    /// È la rete di sicurezza contro il caso peggiore: Watt che muore mentre
+    /// tiene fermi dei servizi di sistema. Senza, resterebbero congelati fino
+    /// al riavvio, e nessuno collegherebbe mai Spotlight che non indicizza più
+    /// a un'app chiusa due giorni prima.
+    public static let maximumSuspension: TimeInterval = 30 * 60
+}
+
+/// Esito di una sospensione.
+public struct SuspensionReport: Codable, Sendable {
+    public var suspended: [String]
+    public var resumed: [String]
+    public var expiresAt: Date?
+
+    public init(suspended: [String] = [], resumed: [String] = [],
+                expiresAt: Date? = nil) {
+        self.suspended = suspended
+        self.resumed = resumed
+        self.expiresAt = expiresAt
+    }
+}

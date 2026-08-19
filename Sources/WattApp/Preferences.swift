@@ -42,28 +42,20 @@ enum Preferences {
         return profile
     }
 
-    /// Il valore era prudente quando ogni campione faceva girare
-    /// `powermetrics` per mezzo secondo. Ora frequenze, temperature e
-    /// memoria si leggono da IOReport, IOHID e Mach senza lanciare nulla, e
-    /// costano microsecondi: tenere la barra dei menu ferma per quindici
-    /// secondi non proteggeva piu' niente, rendeva solo il numero stantio.
-    static var metricsInterval: TimeInterval {
-        get {
-            let stored = UserDefaults.standard.double(forKey: intervalKey)
-            return stored > 0 ? stored : 5
-        }
-        set { UserDefaults.standard.set(newValue, forKey: intervalKey) }
-    }
+    static var metricsInterval: TimeInterval { cadence.rawValue }
 
     /// Cosa mostrare accanto all'icona in barra dei menu.
     enum BarDisplay: String, CaseIterable {
-        case frequency, temperature, both
+        case frequency, socMax, socAverage, battery, storage, freqAndTemp
 
         var label: String {
             switch self {
-            case .frequency:   return "Frequenza"
-            case .temperature: return "Temperatura"
-            case .both:        return "Entrambe"
+            case .frequency:   return "Frequenza P-core"
+            case .socMax:      return "Temperatura massima"
+            case .socAverage:  return "Temperatura media"
+            case .battery:     return "Temperatura batteria"
+            case .storage:     return "Temperatura SSD"
+            case .freqAndTemp: return "Frequenza e temperatura"
             }
         }
     }
@@ -71,9 +63,39 @@ enum Preferences {
     static var barDisplay: BarDisplay {
         get {
             BarDisplay(rawValue: UserDefaults.standard.string(forKey: "barDisplay") ?? "")
-                ?? .frequency
+                ?? .socMax
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "barDisplay") }
+    }
+
+    /// Cadenza di aggiornamento, con il costo di ciascuna scelta.
+    ///
+    /// Leggere i sedici sensori sul die costa circa 17 ms, quindi un
+    /// aggiornamento al secondo occupa l'1,7% di un core in permanenza. È
+    /// poco ma non è zero, e su un'app che resta accesa per giorni va detto
+    /// invece che nascosto.
+    enum Cadence: Double, CaseIterable {
+        case realtime = 1
+        case fast = 2
+        case normal = 5
+        case relaxed = 10
+
+        var label: String {
+            switch self {
+            case .realtime: return "1 secondo (~1,7% di un core)"
+            case .fast:     return "2 secondi (~0,9%)"
+            case .normal:   return "5 secondi (~0,3%)"
+            case .relaxed:  return "10 secondi (~0,2%)"
+            }
+        }
+    }
+
+    static var cadence: Cadence {
+        get {
+            Cadence(rawValue: UserDefaults.standard.double(forKey: intervalKey))
+                ?? .fast
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: intervalKey) }
     }
 
     static var alertsEnabled: Bool {

@@ -72,6 +72,10 @@ final class IdleExit {
     }
 }
 
+// Rete di sicurezza: se una sessione precedente e' morta lasciando servizi
+// congelati oltre la scadenza, li riattiva prima di fare altro.
+ServiceSuspender.resumeIfExpired()
+
 let idle = IdleExit(timeout: 180)
 let service = HelperService(onActivity: { idle.touch() })
 let delegate = HelperListenerDelegate(service: service)

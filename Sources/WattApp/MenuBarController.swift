@@ -29,6 +29,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var isMenuOpen = false
     private var barDisplayItems: [NSMenuItem] = []
     private var thresholdItems: [NSMenuItem] = []
+    private var cadenceItems: [NSMenuItem] = []
+    private var suspendItem = NSMenuItem()
     private var alertsToggle = NSMenuItem()
     private let chartView = TemperatureChartView()
     private let chartItem = NSMenuItem()
@@ -129,9 +131,28 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         buildKeepAwakeSubmenu()
 
+        let cadenceRoot = NSMenuItem(title: "Aggiornamento", action: nil,
+                                     keyEquivalent: "")
+        let cadenceMenu = NSMenu()
+        cadenceMenu.autoenablesItems = false
+        for option in Preferences.Cadence.allCases {
+            let item = NSMenuItem(title: option.label,
+                                  action: #selector(selectCadence(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = option.rawValue
+            cadenceMenu.addItem(item)
+            cadenceItems.append(item)
+        }
+        cadenceRoot.submenu = cadenceMenu
+        cadenceRoot.image = NSImage(systemSymbolName: "timer",
+                                    accessibilityDescription: nil)
+        menu.addItem(cadenceRoot)
+
         let displayRoot = NSMenuItem(title: "Mostra in barra", action: nil,
                                      keyEquivalent: "")
         let displayMenu = NSMenu()
+        displayMenu.autoenablesItems = false
         for option in Preferences.BarDisplay.allCases {
             let item = NSMenuItem(title: option.label,
                                   action: #selector(selectBarDisplay(_:)),
@@ -150,6 +171,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                      accessibilityDescription: nil)
         throttleRoot.submenu = NSMenu()
         menu.addItem(throttleRoot)
+
+        suspendItem = NSMenuItem(title: "Congela i servizi differibili",
+                                 action: #selector(toggleSuspension),
+                                 keyEquivalent: "")
+        suspendItem.target = self
+        suspendItem.image = NSImage(systemSymbolName: "pause.circle",
+                                    accessibilityDescription: nil)
+        suspendItem.toolTip = "Ferma con SIGSTOP indicizzazione Spotlight, "
+                            + "analisi foto, backup e aggiornamenti. "
+                            + "Riprendono da dove erano rimasti, e si "
+                            + "riattivano da soli dopo mezz'ora."
+        menu.addItem(suspendItem)
 
         let purge = NSMenuItem(title: "Libera memoria adesso",
                                action: #selector(purgeMemory),
@@ -222,6 +255,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         renderKeepAwake()
         renderSensors()
         renderThrottle()
+        let suspended = controller.suspendedServices
+        suspendItem.title = suspended.isEmpty
+            ? "Congela i servizi differibili"
+            : "Riattiva \(suspended.count) servizi congelati"
+        suspendItem.state = suspended.isEmpty ? .off : .on
         chartView.history = controller.history
         chartView.warningCelsius = Preferences.alertThreshold
         alertsToggle.state = Preferences.alertsEnabled ? .on : .off
@@ -234,6 +272,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             item.state = (item.representedObject as? String
                           == Preferences.barDisplay.rawValue) ? .on : .off
         }
+        for item in cadenceItems {
+            item.state = (item.representedObject as? Double
+                          == Preferences.cadence.rawValue) ? .on : .off
+        }
         launchItem.state = Preferences.launchAtLogin ? .on : .off
     }
 
@@ -242,29 +284,49 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let sample = controller.lastSample
         let pressure = sample?.thermalPressure ?? .unknown
 
-        // Il throttling ha la precedenza su tutto: e' l'informazione che
-        // nessuna interfaccia di sistema mostra, ed e' il motivo principale
-        // per cui questa app esiste su un Mac senza ventola.
-        let symbol = pressure.isThrottling
-            ? pressure.symbolName
+        // Quando il sistema limita le prestazioni l'elemento cambia colore e
+        // simbolo. Un'icona che resta identica mentre perdi il 60% del clock
+        // e' inutile: il senso di questa app e' che quel momento si veda.
+        let throttling = pressure.isThrottling
+        let symbol = throttling
+            ? "exclamationmark.triangle.fill"
             : controller.profile.symbolName
         button.image = NSImage(systemSymbolName: symbol,
                                accessibilityDescription: controller.profile.title)
+        button.contentTintColor = throttling ? .systemRed : nil
         button.imagePosition = .imageLeading
 
-        let temperature = controller.temperatures?.socCelsius
-            .map { String(format: "%.0f°", $0) }
+        // Ogni voce mostra una grandezza sola: due numeri accostati in barra
+        // dei menu diventano illeggibili appena si affollano altre icone.
+        let temps = controller.temperatures
+        func degrees(_ value: Double?) -> String? {
+            value.map { String(format: "%.0f°", $0) }
+        }
+
         var parts: [String] = []
         switch Preferences.barDisplay {
         case .frequency:
             parts = [sample?.pCoreGHzText].compactMap { $0 }
-        case .temperature:
-            parts = [temperature].compactMap { $0 }
-        case .both:
-            parts = [sample?.pCoreGHzText, temperature].compactMap { $0 }
+        case .socMax:
+            parts = [degrees(temps?.socCelsius)].compactMap { $0 }
+        case .socAverage:
+            parts = [degrees(temps?.socAverageCelsius)].compactMap { $0 }
+        case .battery:
+            parts = [degrees(temps?.batteryCelsius)].compactMap { $0 }
+        case .storage:
+            parts = [degrees(temps?.storageCelsius)].compactMap { $0 }
+        case .freqAndTemp:
+            parts = [sample?.pCoreGHzText, degrees(temps?.socCelsius)]
+                .compactMap { $0 }
         }
         var title = parts.isEmpty ? controller.profile.title
                                   : parts.joined(separator: " · ")
+
+        // Sotto limitazione si aggiunge quanto si sta perdendo: "1.19 GHz" da
+        // solo non dice niente a chi non ricorda che il tetto e' 3.50.
+        if throttling, let fraction = sample?.pCoreCeilingFraction {
+            title += String(format: "  %.0f%%", fraction * 100)
+        }
         if controller.keepAwake.isActive {
             // Marcatore compatto: con due funzioni in un solo elemento serve
             // capire a colpo d'occhio se la sveglia e' attiva.
@@ -299,8 +361,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let temps = controller.temperatures
 
         var rows: [(String, String)] = []
-        rows.append(("Termico", pressure.label
-            + (pressure.isThrottling ? "  - limitato" : "")))
+        if pressure.isThrottling, let fraction = sample?.pCoreCeilingFraction {
+            rows.append(("PRESTAZIONI LIMITATE DAL CALORE",
+                         String(format: "%.0f%% del massimo", fraction * 100)))
+        } else {
+            rows.append(("Termico", pressure.label))
+        }
         rows.append(("Temperatura SoC",
                      ThermalSensors.Summary.format(temps?.socCelsius)))
         rows.append(("P-core", sample?.pCoreSummary ?? "n/d"))
@@ -374,18 +440,30 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         submenu.autoenablesItems = false
         submenu.removeAllItems()
 
-        let readings = controller.temperatures?.all ?? []
-        guard !readings.isEmpty else {
+        let groups = controller.temperatures?.byCategory ?? []
+        guard !groups.isEmpty else {
             submenu.addItem(NSMenuItem(title: "Nessun sensore leggibile",
                                        action: nil, keyEquivalent: ""))
             return
         }
-        for reading in readings {
-            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            item.attributedTitle = Self.row(
-                label: reading.name,
-                value: String(format: "%.1f °C", reading.celsius))
-            submenu.addItem(item)
+
+        // Raggruppati per famiglia invece che in un unico elenco di trentanove
+        // voci: "PMU tdie3" da solo non dice nulla, sotto l'intestazione SoC
+        // si capisce cos'è.
+        for (index, group) in groups.enumerated() {
+            if index > 0 { submenu.addItem(.separator()) }
+            let header = NSMenuItem(title: group.0.label, action: nil,
+                                    keyEquivalent: "")
+            header.image = NSImage(systemSymbolName: group.0.symbolName,
+                                   accessibilityDescription: nil)
+            submenu.addItem(header)
+            for reading in group.1 {
+                let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+                item.attributedTitle = Self.row(
+                    label: "   " + reading.name,
+                    value: String(format: "%.1f °C", reading.celsius))
+                submenu.addItem(item)
+            }
         }
     }
 
@@ -469,11 +547,23 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         controller.setKeepAwake(Self.awakeModes[index])
     }
 
+    @objc private func selectCadence(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? Double,
+              let option = Preferences.Cadence(rawValue: raw) else { return }
+        Preferences.cadence = option
+        poller.restart()
+        render()
+    }
+
     @objc private func selectBarDisplay(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let option = Preferences.BarDisplay(rawValue: raw) else { return }
         Preferences.barDisplay = option
         render()
+    }
+
+    @objc private func toggleSuspension() {
+        controller.toggleServiceSuspension()
     }
 
     @objc private func throttleNow() {
@@ -558,6 +648,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         isMenuOpen = true
         controller.adoptExternalProfileChange()
+        controller.refreshAllSensors()
         poller.setForeground(true)
         controller.refreshState()
         // I watt costano un powermetrics: si chiedono solo mentre qualcuno

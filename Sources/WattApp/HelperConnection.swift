@@ -187,6 +187,36 @@ final class HelperConnection {
         }
     }
 
+    func suspendServices(
+        completion: @escaping @MainActor @Sendable (SuspensionReport?) -> Void
+    ) {
+        callHelper(onFailure: { _ in completion(nil) }) { proxy in
+            proxy.suspendServices { @Sendable data in
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let report = data.flatMap {
+                    try? decoder.decode(SuspensionReport.self, from: $0)
+                }
+                Task { @MainActor in completion(report) }
+            }
+        }
+    }
+
+    func resumeServices(
+        completion: @escaping @MainActor @Sendable (SuspensionReport?) -> Void
+    ) {
+        callHelper(onFailure: { _ in completion(nil) }) { proxy in
+            proxy.resumeServices { @Sendable data in
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let report = data.flatMap {
+                    try? decoder.decode(SuspensionReport.self, from: $0)
+                }
+                Task { @MainActor in completion(report) }
+            }
+        }
+    }
+
     func purgeMemory(completion: @escaping @MainActor @Sendable (String?) -> Void) {
         callHelper(onFailure: { completion($0) }) { proxy in
             proxy.purgeMemory { @Sendable message in

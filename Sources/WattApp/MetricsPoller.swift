@@ -18,6 +18,9 @@ final class MetricsPoller {
 
     func start() { schedule() }
 
+    /// Da chiamare quando cambia la cadenza scelta dall'utente.
+    func restart() { schedule() }
+
     func stop() {
         timer?.invalidate()
         timer = nil
@@ -33,7 +36,10 @@ final class MetricsPoller {
 
     private func schedule() {
         timer?.invalidate()
-        let interval = foreground ? 3 : Preferences.metricsInterval
+        // A menu aperto si aggiorna comunque ogni secondo: è il momento in
+        // cui l'utente sta guardando i numeri, e mezzo punto di CPU per
+        // qualche secondo non è un problema.
+        let interval = foreground ? 1 : Preferences.metricsInterval
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.action() }
         }

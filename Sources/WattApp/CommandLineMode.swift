@@ -45,6 +45,33 @@ enum CommandLineMode {
             uninstall()
             return true
 
+        case "--suspend", "--resume":
+            let suspending = command == "--suspend"
+            let data: Data? = callHelper(timeout: 30) { proxy, done in
+                suspending ? proxy.suspendServices { done($0) }
+                           : proxy.resumeServices { done($0) }
+            }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard let data,
+                  let report = try? decoder.decode(SuspensionReport.self, from: data)
+            else { fail("Helper non raggiungibile.") }
+            if suspending {
+                print(report.suspended.isEmpty
+                    ? "nessun servizio differibile in esecuzione"
+                    : "congelati: " + report.suspended.joined(separator: ", "))
+                if let expiry = report.expiresAt {
+                    let formatter = DateFormatter()
+                    formatter.timeStyle = .short
+                    print("si riattivano da soli alle \(formatter.string(from: expiry))")
+                }
+            } else {
+                print(report.resumed.isEmpty
+                    ? "nessun servizio era congelato"
+                    : "riattivati: " + report.resumed.joined(separator: ", "))
+            }
+            return true
+
         case "--throttle":
             // Le applicazioni con interfaccia si proteggono anche da qui:
             // l'helper si fida di questa lista, e ometterla significherebbe
@@ -132,6 +159,8 @@ enum CommandLineMode {
           Watt --status            stato del sistema e consumi correnti
           Watt --profiles          elenca i profili e cosa fanno
           Watt --temps             tutte le temperature dei sensori
+          Watt --suspend           congela i servizi differibili (SIGSTOP)
+          Watt --resume            li riattiva
           Watt --throttle          rallenta i background che consumano
           Watt --unthrottle        ne ripristina la priorità normale
           Watt --purge             libera la memoria inattiva

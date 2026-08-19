@@ -21,6 +21,7 @@ final class PowerController {
 
     private(set) var history = TemperatureHistory()
     private(set) var throttleReport: ThrottleReport?
+    private(set) var suspendedServices: [String] = []
 
     /// Sveglia controllata dall'utente, indipendente dal profilo: un Mac
     /// tenuto sveglio durante una build non ha niente a che vedere con la
@@ -87,7 +88,15 @@ final class PowerController {
                     self.throttleReport = report
                     self.notify()
                 }
-            } else if self.throttleReport != nil {
+                self.helper.suspendServices { report in
+                    self.suspendedServices = report?.suspended ?? []
+                    self.notify()
+                }
+            } else if self.throttleReport != nil || !self.suspendedServices.isEmpty {
+                self.helper.resumeServices { _ in
+                    self.suspendedServices = []
+                    self.notify()
+                }
                 self.helper.restoreThrottled { _ in
                     self.throttleReport = nil
                     self.notify()
@@ -132,6 +141,13 @@ final class PowerController {
         notify()
     }
 
+    /// Lettura completa di tutti i sensori, per l'elenco dettagliato.
+    func refreshAllSensors() {
+        guard let full = sensors?.read() else { return }
+        temperatures = full
+        notify()
+    }
+
     func refreshState() {
         helper.readSystemState { [weak self] state in
             guard let self else { return }
@@ -153,7 +169,10 @@ final class PowerController {
     /// chiedono solo quando il menu e' aperto.
     func refreshMetrics() {
         memory = MemoryReader.read()
-        temperatures = sensors?.read()
+        // Solo i sensori sul die: bastano per la barra dei menu e per il
+        // grafico, e costano un terzo della lettura completa. L'elenco
+        // integrale si legge quando qualcuno lo sta guardando.
+        temperatures = sensors?.readDie()
 
         if let summary = temperatures, !summary.all.isEmpty {
             // La media è su tutti i sensori, la massima è il punto più caldo:
@@ -222,6 +241,20 @@ final class PowerController {
             guard let self else { return }
             self.throttleReport = nil
             self.notify()
+        }
+    }
+
+    func toggleServiceSuspension() {
+        if suspendedServices.isEmpty {
+            helper.suspendServices { [weak self] report in
+                self?.suspendedServices = report?.suspended ?? []
+                self?.notify()
+            }
+        } else {
+            helper.resumeServices { [weak self] _ in
+                self?.suspendedServices = []
+                self?.notify()
+            }
         }
     }
 

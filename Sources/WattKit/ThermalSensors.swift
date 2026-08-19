@@ -17,9 +17,49 @@ import IOKit
 /// l'app perde le temperature invece di crollare.
 public final class ThermalSensors {
 
+    /// Famiglia di appartenenza di un sensore, dedotta dal nome.
+    ///
+    /// La classificazione avviene una volta sola alla costruzione: farla a
+    /// ogni lettura significherebbe ripetere trentanove confronti di stringhe
+    /// ogni secondo per un dato che non cambia mai.
+    public enum Category: String, Codable, Sendable, CaseIterable {
+        case die, power, storage, battery, other
+
+        public var label: String {
+            switch self {
+            case .die:     return "SoC"
+            case .power:   return "Alimentazione"
+            case .storage: return "Archiviazione"
+            case .battery: return "Batteria"
+            case .other:   return "Altro"
+            }
+        }
+
+        public var symbolName: String {
+            switch self {
+            case .die:     return "cpu"
+            case .power:   return "bolt"
+            case .storage: return "internaldrive"
+            case .battery: return "battery.100"
+            case .other:   return "sensor"
+            }
+        }
+
+        static func infer(from name: String) -> Category {
+            let lower = name.lowercased()
+            if lower.contains("tdie") { return .die }
+            if lower.contains("battery") || lower.contains("gas gauge") { return .battery }
+            if lower.contains("nand") || lower.contains("ssd") { return .storage }
+            if lower.contains("tdev") || lower.contains("tcal")
+                || lower.contains("pmu") { return .power }
+            return .other
+        }
+    }
+
     public struct Reading: Sendable {
         public var name: String
         public var celsius: Double
+        public var category: Category
     }
 
     public struct Summary: Sendable {
@@ -28,9 +68,20 @@ public final class ThermalSensors {
         /// Si prende il massimo e non la media perche' e' il punto piu' caldo
         /// a determinare quando il sistema inizia a limitare le prestazioni.
         public var socCelsius: Double?
+        /// Media dei soli sensori sul die: dice se sta scaldando tutto il SoC
+        /// o un punto solo.
+        public var socAverageCelsius: Double?
         public var batteryCelsius: Double?
         public var storageCelsius: Double?
         public var all: [Reading]
+
+        /// Letture raggruppate per famiglia, ciascun gruppo dal piu' caldo.
+        public var byCategory: [(Category, [Reading])] {
+            Category.allCases.compactMap { category in
+                let group = all.filter { $0.category == category }
+                return group.isEmpty ? nil : (category, group)
+            }
+        }
 
         public static func format(_ celsius: Double?) -> String {
             guard let celsius else { return "n/d" }
@@ -57,6 +108,15 @@ public final class ThermalSensors {
     private let services: [AnyObject]
     /// Nome di ciascun servizio, appaiato per indice a `services`.
     private let names: [String]
+    private let categories: [Category]
+    /// Indici dei soli sensori sul die.
+    ///
+    /// La barra dei menu ha bisogno solo di questi. Leggere tutti e trentanove
+    /// i sensori costa circa 52 ms contro i 17 del sottoinsieme, e a un
+    /// aggiornamento al secondo la differenza è fra il 5% e l'1,7% di un core
+    /// occupato per sempre: troppo, per un'app che sta in barra dei menu
+    /// giorni interi.
+    private let dieIndices: [Int]
 
     private static let appleVendorPage: Int64 = 0xff00
     private static let temperatureUsage: Int64 = 5
@@ -102,38 +162,59 @@ public final class ThermalSensors {
         else { return nil }
 
         self.services = list
-        self.names = list.map { service in
+        let resolved = list.map { service in
             (copyProperty(service, "Product" as CFString)?
                 .takeRetainedValue() as? String) ?? "?"
         }
+        self.names = resolved
+        self.categories = resolved.map(Category.infer(from:))
+        self.dieIndices = categories.enumerated()
+            .filter { $0.element == .die }.map(\.offset)
     }
 
     // MARK: - Lettura
 
+    /// Legge tutti i sensori. Da usare quando l'elenco completo e' a schermo.
     public func read() -> Summary {
-        var readings: [Reading] = []
-        readings.reserveCapacity(services.count)
+        summary(from: readValues(at: Array(services.indices)))
+    }
 
-        for (index, service) in services.enumerated() {
+    /// Legge i soli sensori sul die: e' quanto serve alla barra dei menu, a
+    /// circa un terzo del costo.
+    public func readDie() -> Summary {
+        summary(from: readValues(at: dieIndices))
+    }
+
+    private func readValues(at indices: [Int]) -> [Reading] {
+        var readings: [Reading] = []
+        readings.reserveCapacity(indices.count)
+        for index in indices {
             guard let eventRaw = copyEvent(
-                service, Self.temperatureEvent, 0, 0) else { continue }
+                services[index], Self.temperatureEvent, 0, 0) else { continue }
             let celsius = floatValue(
                 eventRaw.takeRetainedValue(), Self.temperatureField)
             // Uno zero non e' una temperatura plausibile per un Mac acceso:
             // e' un sensore che in quel momento non ha un valore.
             guard celsius > 0, celsius < 150 else { continue }
-            readings.append(Reading(name: names[index], celsius: celsius))
+            readings.append(Reading(name: names[index], celsius: celsius,
+                                    category: categories[index]))
         }
+        return readings
+    }
 
-        func hottest(where matches: (String) -> Bool) -> Double? {
-            readings.filter { matches($0.name.lowercased()) }
-                .map(\.celsius).max()
+    private func summary(from readings: [Reading]) -> Summary {
+        func hottest(_ category: Category) -> Double? {
+            readings.filter { $0.category == category }.map(\.celsius).max()
         }
+        let die = readings.filter { $0.category == .die }.map(\.celsius)
 
         return Summary(
-            socCelsius: hottest { $0.contains("tdie") },
-            batteryCelsius: hottest { $0.contains("battery") || $0.contains("gas gauge") },
-            storageCelsius: hottest { $0.contains("nand") || $0.contains("ssd") },
+            socCelsius: die.max(),
+            socAverageCelsius: die.isEmpty
+                ? nil : die.reduce(0, +) / Double(die.count),
+            batteryCelsius: hottest(.battery),
+            storageCelsius: hottest(.storage),
             all: readings.sorted { $0.celsius > $1.celsius })
     }
+
 }

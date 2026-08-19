@@ -98,6 +98,28 @@ final class HelperService: NSObject, WattHelperProtocol {
         queue.async { reply(SmartThrottle.restoreThrottled()) }
     }
 
+    func suspendServices(reply: @escaping (Data?) -> Void) {
+        activity()
+        queue.async {
+            let report = ServiceSuspender.suspend()
+            reply(Self.encode(report))
+        }
+    }
+
+    func resumeServices(reply: @escaping (Data?) -> Void) {
+        activity()
+        queue.async {
+            let report = ServiceSuspender.resume()
+            reply(Self.encode(report))
+        }
+    }
+
+    private static func encode(_ report: SuspensionReport) -> Data? {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return try? encoder.encode(report)
+    }
+
     func purgeMemory(reply: @escaping (String?) -> Void) {
         activity()
         queue.async {

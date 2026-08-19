@@ -53,6 +53,15 @@ enum ProfileApplier {
             DemotionState.isDemoted = plan.demoteBackgroundDaemons
         }
 
+        // Solo Massimo congela i servizi; ogni altro profilo li riattiva.
+        // Un servizio lasciato fermo dopo che sei tornato ad Automatico e' una
+        // modifica invisibile che nessuno collegherebbe mai a questa app.
+        if plan.demoteBackgroundDaemons {
+            _ = ServiceSuspender.suspend()
+        } else if ServiceSuspender.isSuspended {
+            _ = ServiceSuspender.resume()
+        }
+
         if plan.purgeMemory {
             purgeMemory(&report)
         }
@@ -98,6 +107,7 @@ enum ProfileApplier {
             restoreBackgroundDaemons(&report)
             DemotionState.isDemoted = false
         }
+        if ServiceSuspender.isSuspended { _ = ServiceSuspender.resume() }
     }
 
     // MARK: - Singole leve

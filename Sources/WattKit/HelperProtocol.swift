@@ -34,6 +34,14 @@ import Foundation
     func throttleHeavyBackground(protectedPIDs: [NSNumber],
                                  reply: @escaping (Data?) -> Void)
 
+    /// Congela con SIGSTOP i servizi di sistema differibili.
+    ///
+    /// Payload della risposta: `SuspensionReport` in JSON.
+    func suspendServices(reply: @escaping (Data?) -> Void)
+
+    /// Li riattiva con SIGCONT.
+    func resumeServices(reply: @escaping (Data?) -> Void)
+
     /// Ripristina la priorità normale di tutto ciò che era stato rallentato.
     func restoreThrottled(reply: @escaping (String?) -> Void)
 
