@@ -202,10 +202,11 @@ final class PowerController {
     /// chiedono solo quando il menu e' aperto.
     func refreshMetrics() {
         memory = MemoryReader.read()
-        // Solo i sensori sul die: bastano per la barra dei menu e per il
-        // grafico, e costano un terzo della lettura completa. L'elenco
-        // integrale si legge quando qualcuno lo sta guardando.
-        temperatures = sensors?.readEssential()
+        // Lettura adattiva: i sensori piu' caldi a ogni giro, il die intero
+        // ogni tanto, batteria e SSD di rado. Costa un terzo della lettura
+        // essenziale e un decimo di quella completa, che si fa solo quando
+        // l'elenco integrale e' a schermo.
+        temperatures = sensors?.readAdaptive()
 
         if let summary = temperatures, !summary.all.isEmpty {
             // La media è su tutti i sensori, la massima è il punto più caldo:

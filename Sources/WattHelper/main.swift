@@ -63,6 +63,15 @@ final class IdleExit {
         queue.async {
             self.work?.cancel()
             let item = DispatchWorkItem {
+                // Uscire lasciando dei servizi congelati significa lasciarli
+                // congelati fino al riavvio: la scadenza la fa rispettare
+                // questo processo, e non c'e' nessun altro dopo di lui.
+                ServiceSuspender.resumeIfExpired()
+                if ServiceSuspender.isSuspended {
+                    NSLog("[Watt] servizi ancora sospesi: resto in attesa della scadenza")
+                    self.touch()
+                    return
+                }
                 NSLog("[Watt] helper inattivo, esco")
                 exit(0)
             }

@@ -36,8 +36,36 @@ subprocess.run(["/usr/bin/tmutil",
 print("    baseline riapplicata")
 PYEOF
     rm -f "$BASELINE"
-    rmdir "/Library/Application Support/Watt" 2>/dev/null || true
 fi
+
+SUSPENDED="/Library/Application Support/Watt/suspended.json"
+if [[ -f "$SUSPENDED" ]]; then
+    echo "==> Riattivo i servizi congelati"
+    # Un processo fermato con SIGSTOP resta fermo finche' qualcuno non gli
+    # manda SIGCONT. Se l'helper sparisce prima, quel qualcuno non esiste
+    # piu' e Spotlight resta fermo fino al riavvio.
+    python3 - "$SUSPENDED" <<'PY_RESUME'
+import json, os, signal, subprocess, sys
+state = json.load(open(sys.argv[1]))
+resumed = 0
+for pid, name in zip(state.get("pids", []), state.get("names", [])):
+    # Il PID puo' essere stato riciclato: si riattiva solo se porta ancora
+    # lo stesso nome.
+    actual = subprocess.run(["/bin/ps", "-o", "comm=", "-p", str(pid)],
+                            capture_output=True, text=True).stdout.strip()
+    if not actual or os.path.basename(actual) != name:
+        continue
+    try:
+        os.kill(pid, signal.SIGCONT)
+        resumed += 1
+    except OSError:
+        pass
+print(f"    riattivati {resumed} processi")
+PY_RESUME
+    rm -f "$SUSPENDED"
+fi
+
+rmdir "/Library/Application Support/Watt" 2>/dev/null || true
 
 echo "==> Scarico il demone"
 launchctl bootout "system/$LABEL" 2>/dev/null || true

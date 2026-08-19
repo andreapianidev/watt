@@ -130,7 +130,7 @@ final class TemperatureChartView: NSView {
                    color: .tertiaryLabelColor)
             .draw(at: NSPoint(x: 2, y: plot.minY - 4))
 
-        let minutes = Double(history.points.count) * 5 / 60
+        let minutes = history.span / 60
         attributed(L("last %.0f min", max(minutes, 1)),
                    size: 9, color: .tertiaryLabelColor)
             .draw(at: NSPoint(x: plot.minX, y: 3))

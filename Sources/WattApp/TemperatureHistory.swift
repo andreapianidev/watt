@@ -10,15 +10,19 @@ struct TemperatureHistory {
     struct Point {
         var maximum: Double
         var average: Double
+        /// Quando e' stato preso. La cadenza non e' una costante — l'utente
+        /// la sceglie, e cambia da sola quando il menu si apre — quindi
+        /// contare i punti non basta per sapere quanto tempo coprono.
+        var at: Date
     }
 
-    /// A un campione ogni 5 secondi, 240 punti coprono venti minuti: la
-    /// scala su cui si vede salire il calore durante una build.
+    /// Alla cadenza predefinita di due secondi, 240 punti coprono otto
+    /// minuti: la scala su cui si vede salire il calore durante una build.
     private(set) var points: [Point] = []
     let capacity = 240
 
     mutating func append(maximum: Double, average: Double) {
-        points.append(Point(maximum: maximum, average: average))
+        points.append(Point(maximum: maximum, average: average, at: Date()))
         if points.count > capacity {
             points.removeFirst(points.count - capacity)
         }
@@ -43,6 +47,13 @@ struct TemperatureHistory {
     }
 
     var peak: Double? { points.map(\.maximum).max() }
+
+    /// Durata effettivamente coperta dai punti in memoria.
+    var span: TimeInterval {
+        guard let first = points.first?.at, let last = points.last?.at
+        else { return 0 }
+        return last.timeIntervalSince(first)
+    }
 
     var meanOfAverages: Double? {
         guard !points.isEmpty else { return nil }

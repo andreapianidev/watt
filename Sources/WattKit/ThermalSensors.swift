@@ -117,6 +117,13 @@ public final class ThermalSensors {
     /// occupato per sempre: troppo, per un'app che sta in barra dei menu
     /// giorni interi.
     private let dieIndices: [Int]
+    private let barIndices: [Int]
+    private let slowIndices: [Int]
+
+    /// Stato del campionamento adattivo.
+    private var tick = 0
+    private var hotIndices: [Int] = []
+    private var lastSlow: [Reading] = []
 
     private static let appleVendorPage: Int64 = 0xff00
     private static let temperatureUsage: Int64 = 5
@@ -175,6 +182,16 @@ public final class ThermalSensors {
         self.dieIndices = categories.enumerated()
             .filter { [.die, .battery, .storage].contains($0.element) }
             .map(\.offset)
+        self.barIndices = categories.enumerated()
+            .filter { $0.element == .die }
+            .map(\.offset)
+        self.slowIndices = categories.enumerated()
+            .filter { [.battery, .storage].contains($0.element) }
+            .map(\.offset)
+        // Finche' non e' stata fatta la prima scansione completa l'insieme
+        // caldo e' tutto il die: meglio pagare un giro pieno che partire
+        // mostrando la temperatura sbagliata.
+        self.hotIndices = self.barIndices
     }
 
     // MARK: - Lettura
@@ -191,6 +208,74 @@ public final class ThermalSensors {
     /// fatta, e le due righe tornavano a "n/d" da sole.
     public func readEssential() -> Summary {
         summary(from: readValues(at: dieIndices))
+    }
+
+    /// Lettura continua, il piu' economica possibile a parita' di risultato.
+    ///
+    /// Ogni sensore costa un giro di IPC verso il sistema HID: circa un
+    /// millisecondo, e su questo Mac i sensori sono trentacinque. Leggerli
+    /// tutti una volta al secondo significa il 5% di un core solo per
+    /// guardare un termometro — cioe' un'app che si mangia le prestazioni
+    /// che dice di misurare.
+    ///
+    /// Qui si sfrutta il fatto che i sedici sensori del die non si muovono
+    /// in modo indipendente: sono lo stesso pezzo di silicio, e gli otto
+    /// piu' caldi stanno in un grado e mezzo l'uno dall'altro. Quindi:
+    ///
+    /// - a ogni giro si leggono i quattro piu' caldi conosciuti, che sono
+    ///   quelli da cui il massimo esce quasi sempre;
+    /// - ogni dieci giri si rilegge il die per intero, cosi' se il carico si
+    ///   sposta da un cluster all'altro l'insieme caldo si aggiorna;
+    /// - batteria e SSD si rileggono ogni trenta giri, perche' cambiano di
+    ///   un grado in qualche minuto, e nel frattempo si tiene l'ultimo valore
+    ///   invece di far sparire la riga dal menu.
+    ///
+    /// Il prezzo e' che subito dopo uno spostamento di carico il massimo puo'
+    /// essere sottostimato di un grado o due, per meno di dieci secondi.
+    public func readAdaptive() -> Summary {
+        defer { tick += 1 }
+
+        let fullDie = tick % Self.dieRescanEvery == 0
+        let withSlow = tick % Self.slowRescanEvery == 0
+
+        var indices = fullDie ? barIndices : hotIndices
+        if withSlow { indices += slowIndices }
+
+        var readings = readValues(at: indices)
+
+        if fullDie {
+            // Aggiorna l'insieme caldo con i piu' caldi appena misurati.
+            let ranked = readings.filter { $0.category == .die }
+                .sorted { $0.celsius > $1.celsius }
+            let names = Set(ranked.prefix(Self.hotCount).map(\.name))
+            let updated = barIndices.filter { names.contains(self.names[$0]) }
+            if !updated.isEmpty { hotIndices = updated }
+        }
+
+        // Batteria e SSD: se non sono stati riletti in questo giro, si
+        // riusa l'ultima misura invece di lasciare la riga vuota.
+        if withSlow {
+            lastSlow = readings.filter { $0.category != .die }
+        } else {
+            readings += lastSlow
+        }
+
+        return summary(from: readings)
+    }
+
+    private static let hotCount = 4
+    private static let dieRescanEvery = 10
+    private static let slowRescanEvery = 30
+
+    /// Legge i soli sensori del die: e' tutto cio' che servono la barra dei
+    /// menu e il grafico.
+    ///
+    /// Ogni sensore costa un giro di IPC verso il sistema HID, per cui il
+    /// costo e' lineare nel numero di sensori letti. Batteria e SSD cambiano
+    /// di un grado in qualche minuto: rileggerli ogni secondo e' spesa senza
+    /// informazione.
+    public func readBar() -> Summary {
+        summary(from: readValues(at: barIndices))
     }
 
     private func readValues(at indices: [Int]) -> [Reading] {

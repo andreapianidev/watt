@@ -116,14 +116,31 @@ enum ProcessTable {
             return (bundle as NSString).lastPathComponent
         }
 
-        let basename = (path as NSString).lastPathComponent
+        let components = path.split(separator: "/").map(String.init)
+        guard let basename = components.last else { return fallback }
+        if basename.contains(where: { $0.isLetter }) { return basename }
+
         // Alcuni programmi installano l'eseguibile con il numero di versione
-        // come nome del file: il percorso reale finisce in "2.1.235", che a
-        // chi deve decidere cosa chiudere non dice nulla. In quel caso il
-        // nome breve del processo e' piu' informativo del suo percorso.
-        let hasLetters = basename.contains { $0.isLetter }
-        return hasLetters ? basename : fallback
+        // come nome del file — "~/.local/share/claude/versions/2.1.235" — e
+        // il nome breve del processo, che viene dallo stesso file, non aiuta:
+        // dice "2.1.235" anche lui. A chi deve decidere cosa chiudere non
+        // serve a niente. Il nome vero e' quello della prima cartella che lo
+        // contiene e che non sia solo un contenitore tecnico.
+        for component in components.dropLast().reversed()
+        where !genericContainers.contains(component.lowercased())
+           && component.contains(where: { $0.isLetter }) {
+            return component
+        }
+        return fallback
     }
+
+    /// Cartelle che dicono dove sta un binario, non che cosa sia.
+    private static let genericContainers: Set<String> = [
+        "bin", "sbin", "libexec", "macos", "contents", "resources", "versions",
+        "current", "native-binary", "node_modules", "dist", "build", "out",
+        "release", "debug", "helpers", "frameworks", "usr", "local", "share",
+        "opt", "var", "tmp", "private", "system", "library", "applications",
+    ]
 
     /// Catena degli antenati di un processo, fino a `launchd`.
     ///

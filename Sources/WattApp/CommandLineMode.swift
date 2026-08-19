@@ -110,6 +110,13 @@ enum CommandLineMode {
             sampler.dumpLastComputation()
             return true
 
+        case "--bench":
+            // Quanto costa un giro di campionamento. Un'app che promette
+            // prestazioni non puo' essere una voce di consumo, e l'unico
+            // modo per saperlo e' misurarsi.
+            benchmark()
+            return true
+
         case "--diagnose":
             diagnose()
             return true
@@ -502,4 +509,63 @@ private final class ResultBox<T>: @unchecked Sendable {
     private var stored: T?
     func set(_ value: T?) { lock.lock(); stored = value; lock.unlock() }
     var value: T? { lock.lock(); defer { lock.unlock() }; return stored }
+}
+
+/// Costo di ciascuna lettura periodica, in millisecondi.
+private func benchmark() {
+    func time(_ label: String, iterations: Int = 20, _ body: () -> Void) {
+        body()  // giro a vuoto: la prima chiamata paga la cache fredda
+        let start = Date()
+        for _ in 0..<iterations { body() }
+        let each = Date().timeIntervalSince(start) / Double(iterations) * 1000
+        print(String(format: "   %-28@ %6.2f ms   %5.2f%% a 1 Hz",
+                     label as NSString, each, each / 10))
+    }
+
+    print("costo di un giro di campionamento\n")
+    if let sensors = ThermalSensors() {
+        let all = sensors.read()
+        print("   \(all.all.count) sensori leggibili\n")
+        time("sensori: tutti") { _ = sensors.read() }
+        time("sensori: essenziali") { _ = sensors.readEssential() }
+        time("sensori: solo die") { _ = sensors.readBar() }
+        time("sensori: adattivo") { _ = sensors.readAdaptive() }
+    }
+    if let sampler = IOReportSampler() {
+        time("frequenze (IOReport)") { _ = sampler.sample() }
+    }
+    time("memoria") { _ = MemoryReader.read() }
+    print("\nla percentuale e' il costo continuo se la lettura")
+    print("viene ripetuta una volta al secondo.")
+
+    // Il risparmio vale solo se il numero mostrato resta quello giusto:
+    // qui si confronta il massimo adattivo con quello letto per intero,
+    // sugli stessi istanti.
+    if let sensors = ThermalSensors() {
+        print("\nfedelta' del campionamento adattivo (30 giri)\n")
+        var worst = 0.0
+        var sum = 0.0
+        for _ in 0..<30 {
+            let fast = sensors.readAdaptive().socCelsius ?? 0
+            let full = sensors.read().socCelsius ?? 0
+            let error = abs(full - fast)
+            worst = max(worst, error)
+            sum += error
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        print(String(format: "   scarto medio   %.2f °C", sum / 30))
+        print(String(format: "   scarto massimo %.2f °C", worst))
+
+        // Controllo: due letture complete di fila. Lo scarto che resta qui e'
+        // il rumore del sensore, non l'errore del metodo adattivo.
+        var noise = 0.0
+        for _ in 0..<30 {
+            let a = sensors.read().socCelsius ?? 0
+            let b = sensors.read().socCelsius ?? 0
+            noise += abs(a - b)
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        print(String(format: "   di cui rumore  %.2f °C  (due letture complete di fila)",
+                     noise / 30))
+    }
 }
