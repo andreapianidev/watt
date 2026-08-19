@@ -14,6 +14,10 @@ final class PowerController {
     /// l'API non e' disponibile su questa versione di macOS.
     private let ioReport = IOReportSampler()
 
+    /// Sensori termici HID. Come IOReport non richiedono privilegi, quindi
+    /// restano nell'app e funzionano anche senza helper installato.
+    private let sensors = ThermalSensors()
+
     /// Sveglia controllata dall'utente, indipendente dal profilo: un Mac
     /// tenuto sveglio durante una build non ha niente a che vedere con la
     /// scelta del profilo energetico, e mescolarle renderebbe entrambe
@@ -23,6 +27,7 @@ final class PowerController {
     private(set) var profile: PowerProfile
     private(set) var lastSample: PowerSample?
     private(set) var memory: MemoryReader.Snapshot?
+    private(set) var temperatures: ThermalSensors.Summary?
     private(set) var lastState: SystemState?
     private(set) var lastError: String?
 
@@ -92,6 +97,7 @@ final class PowerController {
     /// chiedono solo quando il menu e' aperto.
     func refreshMetrics() {
         memory = MemoryReader.read()
+        temperatures = sensors?.read()
 
         var sample = lastSample ?? PowerSample()
         if let reading = ioReport?.sample() {

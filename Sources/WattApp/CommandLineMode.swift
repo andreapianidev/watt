@@ -29,6 +29,23 @@ enum CommandLineMode {
             apply(profile)
             return true
 
+        case "--temps":
+            guard let summary = ThermalSensors()?.read(), !summary.all.isEmpty else {
+                fail("Sensori termici non leggibili su questo sistema.")
+            }
+            print(String(format: "SoC      : %@",
+                         ThermalSensors.Summary.format(summary.socCelsius)))
+            print(String(format: "batteria : %@",
+                         ThermalSensors.Summary.format(summary.batteryCelsius)))
+            print(String(format: "SSD      : %@",
+                         ThermalSensors.Summary.format(summary.storageCelsius)))
+            print("\n\(summary.all.count) sensori:")
+            for reading in summary.all {
+                print(String(format: "   %-24@ %6.1f °C",
+                             reading.name as NSString, reading.celsius))
+            }
+            return true
+
         case "--purge":
             let failure = callHelper { proxy, done in
                 proxy.purgeMemory { done($0) }
@@ -71,6 +88,7 @@ enum CommandLineMode {
           Watt --apply <profilo>   applica un profilo ed esce
           Watt --status            stato del sistema e consumi correnti
           Watt --profiles          elenca i profili e cosa fanno
+          Watt --temps             tutte le temperature dei sensori
           Watt --purge             libera la memoria inattiva
           Watt --run <profilo> -- <comando ...>
                                    esegue il comando con il profilo applicato
@@ -154,6 +172,12 @@ enum CommandLineMode {
         }
         print("termico         : \(pressure.label)"
             + (pressure.isThrottling ? "  <- prestazioni limitate" : ""))
+        if let temps = ThermalSensors()?.read() {
+            print("temperatura SoC : \(ThermalSensors.Summary.format(temps.socCelsius))")
+            print("batteria / SSD  : "
+                + ThermalSensors.Summary.format(temps.batteryCelsius) + " / "
+                + ThermalSensors.Summary.format(temps.storageCelsius))
+        }
         if let watts = sample?.packageWattsText {
             print("pacchetto       : \(watts)")
         }

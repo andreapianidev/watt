@@ -1,0 +1,139 @@
+import Foundation
+import IOKit
+
+/// Legge i sensori di temperatura del Mac.
+///
+/// Su Apple Silicon i sensori termici non passano piu' dall'SMC come sui Mac
+/// Intel: sono esposti come servizi HID nella pagina "Apple Vendor", ed e'
+/// da li' che li prendono gli strumenti che mostrano le temperature. Un M2
+/// Air ne espone una quarantina.
+///
+/// Non servono privilegi, quindi la lettura resta nell'app: far passare da
+/// un demone root qualcosa che root non lo richiede sarebbe solo superficie
+/// d'attacco in piu'.
+///
+/// Le funzioni non sono dichiarate in header pubblici e si risolvono a
+/// runtime: se un aggiornamento di macOS le spostasse, `init?` fallisce e
+/// l'app perde le temperature invece di crollare.
+public final class ThermalSensors {
+
+    public struct Reading: Sendable {
+        public var name: String
+        public var celsius: Double
+    }
+
+    public struct Summary: Sendable {
+        /// Temperatura del die del SoC: il massimo fra i sensori `tdie`.
+        ///
+        /// Si prende il massimo e non la media perche' e' il punto piu' caldo
+        /// a determinare quando il sistema inizia a limitare le prestazioni.
+        public var socCelsius: Double?
+        public var batteryCelsius: Double?
+        public var storageCelsius: Double?
+        public var all: [Reading]
+
+        public static func format(_ celsius: Double?) -> String {
+            guard let celsius else { return "n/d" }
+            return String(format: "%.0f °C", celsius)
+        }
+    }
+
+    // MARK: - Simboli
+
+    private typealias FnCreate = @convention(c) (CFAllocator?) -> Unmanaged<AnyObject>?
+    private typealias FnMatching = @convention(c) (AnyObject?, CFDictionary?) -> Void
+    private typealias FnServices = @convention(c) (AnyObject?) -> Unmanaged<CFArray>?
+    private typealias FnProperty = @convention(c) (AnyObject?, CFString?) -> Unmanaged<CFTypeRef>?
+    private typealias FnEvent = @convention(c) (AnyObject?, Int64, Int32, UInt64) -> Unmanaged<AnyObject>?
+    private typealias FnFloat = @convention(c) (AnyObject?, UInt32) -> Double
+
+    private let copyProperty: FnProperty
+    private let copyEvent: FnEvent
+    private let floatValue: FnFloat
+
+    private let client: AnyObject
+    /// Elenco dei servizi, risolto una volta sola: enumerarli a ogni lettura
+    /// costerebbe piu' della lettura stessa.
+    private let services: [AnyObject]
+    /// Nome di ciascun servizio, appaiato per indice a `services`.
+    private let names: [String]
+
+    private static let appleVendorPage: Int64 = 0xff00
+    private static let temperatureUsage: Int64 = 5
+    private static let temperatureEvent: Int64 = 15
+    /// I campi di un evento HID sono indicizzati per tipo: base = tipo << 16.
+    private static let temperatureField = UInt32(temperatureEvent << 16)
+
+    // MARK: - Costruzione
+
+    public init?() {
+        guard let library = dlopen(
+            "/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY)
+        else { return nil }
+
+        func symbol<T>(_ name: String, _ type: T.Type) -> T? {
+            guard let pointer = dlsym(library, name) else { return nil }
+            return unsafeBitCast(pointer, to: type)
+        }
+        guard
+            let create = symbol("IOHIDEventSystemClientCreate", FnCreate.self),
+            let setMatching = symbol("IOHIDEventSystemClientSetMatching", FnMatching.self),
+            let copyServices = symbol("IOHIDEventSystemClientCopyServices", FnServices.self),
+            let copyProperty = symbol("IOHIDServiceClientCopyProperty", FnProperty.self),
+            let copyEvent = symbol("IOHIDServiceClientCopyEvent", FnEvent.self),
+            let floatValue = symbol("IOHIDEventGetFloatValue", FnFloat.self),
+            let clientRaw = create(kCFAllocatorDefault)
+        else { return nil }
+
+        self.copyProperty = copyProperty
+        self.copyEvent = copyEvent
+        self.floatValue = floatValue
+        self.client = clientRaw.takeRetainedValue()
+
+        let filter: [String: Int64] = [
+            "PrimaryUsagePage": Self.appleVendorPage,
+            "PrimaryUsage": Self.temperatureUsage,
+        ]
+        setMatching(client, filter as CFDictionary)
+
+        guard let listRaw = copyServices(client),
+              let list = listRaw.takeRetainedValue() as? [AnyObject],
+              !list.isEmpty
+        else { return nil }
+
+        self.services = list
+        self.names = list.map { service in
+            (copyProperty(service, "Product" as CFString)?
+                .takeRetainedValue() as? String) ?? "?"
+        }
+    }
+
+    // MARK: - Lettura
+
+    public func read() -> Summary {
+        var readings: [Reading] = []
+        readings.reserveCapacity(services.count)
+
+        for (index, service) in services.enumerated() {
+            guard let eventRaw = copyEvent(
+                service, Self.temperatureEvent, 0, 0) else { continue }
+            let celsius = floatValue(
+                eventRaw.takeRetainedValue(), Self.temperatureField)
+            // Uno zero non e' una temperatura plausibile per un Mac acceso:
+            // e' un sensore che in quel momento non ha un valore.
+            guard celsius > 0, celsius < 150 else { continue }
+            readings.append(Reading(name: names[index], celsius: celsius))
+        }
+
+        func hottest(where matches: (String) -> Bool) -> Double? {
+            readings.filter { matches($0.name.lowercased()) }
+                .map(\.celsius).max()
+        }
+
+        return Summary(
+            socCelsius: hottest { $0.contains("tdie") },
+            batteryCelsius: hottest { $0.contains("battery") || $0.contains("gas gauge") },
+            storageCelsius: hottest { $0.contains("nand") || $0.contains("ssd") },
+            all: readings.sorted { $0.celsius > $1.celsius })
+    }
+}

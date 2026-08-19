@@ -29,6 +29,27 @@ enum Preferences {
         set { UserDefaults.standard.set(newValue, forKey: intervalKey) }
     }
 
+    /// Cosa mostrare accanto all'icona in barra dei menu.
+    enum BarDisplay: String, CaseIterable {
+        case frequency, temperature, both
+
+        var label: String {
+            switch self {
+            case .frequency:   return "Frequenza"
+            case .temperature: return "Temperatura"
+            case .both:        return "Entrambe"
+            }
+        }
+    }
+
+    static var barDisplay: BarDisplay {
+        get {
+            BarDisplay(rawValue: UserDefaults.standard.string(forKey: "barDisplay") ?? "")
+                ?? .frequency
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "barDisplay") }
+    }
+
     static var keepDisplayOn: Bool {
         get { UserDefaults.standard.bool(forKey: "keepDisplayOn") }
         set { UserDefaults.standard.set(newValue, forKey: "keepDisplayOn") }

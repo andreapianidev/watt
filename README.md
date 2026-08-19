@@ -118,7 +118,8 @@ Watt.app
 
 Servono privilegi di root solo per **applicare** i profili: `pmset`,
 `mdutil`, `tmutil`, `taskpolicy`, `purge`. Tutte le **letture** — frequenze,
-tetto DVFS, stato termico, memoria — avvengono nell'app senza privilegi.
+tetto DVFS, temperature, stato termico, memoria — avvengono nell'app senza
+privilegi, e funzionano anche con l'helper disinstallato.
 
 Scelte che vale la pena conoscere prima di leggere il codice:
 
@@ -180,6 +181,32 @@ Al primo avvio il demone resta in attesa: va abilitato in **Impostazioni di
 Sistema → Generali → Elementi login ed estensioni**. Finché non lo fai
 restano attivi solo i profili nella parte che non richiede privilegi.
 
+## Temperature
+
+Su Apple Silicon i sensori termici non passano piu' dall'SMC come sui Mac
+Intel: sono servizi HID nella pagina **Apple Vendor**, ed e' da li' che li
+legge Watt. Un M2 Air ne espone una trentina abbondante.
+
+| | |
+|---|---|
+| `PMU tdie1..8` | sensori sul die del SoC — i piu' caldi |
+| `PMU2 tdie1..8` | secondo complesso |
+| `PMU tdev*`, `tcal` | alimentazione e calibrazione |
+| `NAND CH0` | SSD |
+| `gas gauge battery` | batteria |
+
+Il menu mostra il **massimo** fra i sensori `tdie`, non la media: è il punto
+più caldo a decidere quando il sistema inizia a limitare le prestazioni, e
+una media lo annacquerebbe con sensori periferici più freddi.
+
+Il sottomenu *Tutti i sensori* li elenca dal più caldo al più freddo, e
+`Watt --temps` fa lo stesso da terminale. Anche queste letture non
+richiedono privilegi e restano nell'app: far passare da un demone root
+qualcosa che root non lo richiede sarebbe solo superficie d'attacco in più.
+
+Da *Mostra in barra* si sceglie se accanto all'icona compare la frequenza,
+la temperatura o entrambe.
+
 ## Sveglia (come Amphetamine)
 
 Il secondo mestiere dell'app. Impedisce al Mac di addormentarsi, con le
@@ -206,7 +233,8 @@ di lasciare il Mac sveglio per sempre per sbaglio.
 L'app **è** anche la CLI, ed è pensata per gli script di build:
 
 ```bash
-Watt --status                  # frequenze, termico, stato (senza helper: funziona lo stesso)
+Watt --status                  # frequenze, temperature, termico, stato
+Watt --temps                   # tutti i sensori, dal più caldo
 Watt --apply massimo           # applica un profilo
 Watt --purge                   # libera la memoria inattiva
 Watt --profiles                # cosa fa ciascun profilo

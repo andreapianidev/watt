@@ -25,6 +25,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var keepAwakeItems: [NSMenuItem] = []
     private var displayToggle = NSMenuItem()
     private var launchItem = NSMenuItem()
+    private var sensorsRoot = NSMenuItem()
+    private var isMenuOpen = false
+    private var barDisplayItems: [NSMenuItem] = []
 
     /// Le voci della sveglia, nell'ordine in cui compaiono.
     private static let awakeModes: [KeepAwake.Mode] = [
@@ -70,15 +73,36 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         // Righe informative: sola lettura, riflettono lo stato reale letto
         // dal sistema e non il profilo selezionato.
-        for _ in 0..<4 {
+        for _ in 0..<6 {
             let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
             stateItems.append(item)
         }
 
+        sensorsRoot = NSMenuItem(title: "Tutti i sensori", action: nil, keyEquivalent: "")
+        sensorsRoot.submenu = NSMenu()
+        sensorsRoot.image = NSImage(systemSymbolName: "thermometer.variable",
+                                    accessibilityDescription: nil)
+        menu.addItem(sensorsRoot)
+
         menu.addItem(.separator())
         buildKeepAwakeSubmenu()
+
+        let displayRoot = NSMenuItem(title: "Mostra in barra", action: nil,
+                                     keyEquivalent: "")
+        let displayMenu = NSMenu()
+        for option in Preferences.BarDisplay.allCases {
+            let item = NSMenuItem(title: option.label,
+                                  action: #selector(selectBarDisplay(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = option.rawValue
+            displayMenu.addItem(item)
+            barDisplayItems.append(item)
+        }
+        displayRoot.submenu = displayMenu
+        menu.addItem(displayRoot)
 
         let purge = NSMenuItem(title: "Libera memoria adesso",
                                action: #selector(purgeMemory),
@@ -149,6 +173,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         renderProfileChecks()
         renderStateRows()
         renderKeepAwake()
+        renderSensors()
+        for item in barDisplayItems {
+            item.state = (item.representedObject as? String
+                          == Preferences.barDisplay.rawValue) ? .on : .off
+        }
         launchItem.state = Preferences.launchAtLogin ? .on : .off
     }
 
@@ -167,7 +196,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                accessibilityDescription: controller.profile.title)
         button.imagePosition = .imageLeading
 
-        var title = sample?.pCoreGHzText ?? controller.profile.title
+        let temperature = controller.temperatures?.socCelsius
+            .map { String(format: "%.0f°", $0) }
+        var parts: [String] = []
+        switch Preferences.barDisplay {
+        case .frequency:
+            parts = [sample?.pCoreGHzText].compactMap { $0 }
+        case .temperature:
+            parts = [temperature].compactMap { $0 }
+        case .both:
+            parts = [sample?.pCoreGHzText, temperature].compactMap { $0 }
+        }
+        var title = parts.isEmpty ? controller.profile.title
+                                  : parts.joined(separator: " · ")
         if controller.keepAwake.isActive {
             // Marcatore compatto: con due funzioni in un solo elemento serve
             // capire a colpo d'occhio se la sveglia e' attiva.
@@ -199,19 +240,56 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let sample = controller.lastSample
         let pressure = sample?.thermalPressure ?? .unknown
 
+        let temps = controller.temperatures
+
         var rows: [(String, String)] = []
         rows.append(("Termico", pressure.label
             + (pressure.isThrottling ? "  - limitato" : "")))
+        rows.append(("Temperatura SoC",
+                     ThermalSensors.Summary.format(temps?.socCelsius)))
         rows.append(("P-core", sample?.pCoreSummary ?? "n/d"))
         rows.append(("Pacchetto", sample?.packageWattsText ?? "n/d"))
         rows.append(("Memoria disponibile",
                      controller.memory?.availableText ?? "n/d"))
+        rows.append(("Batteria / SSD",
+                     ThermalSensors.Summary.format(temps?.batteryCelsius)
+                     + " / "
+                     + ThermalSensors.Summary.format(temps?.storageCelsius)))
 
         for (index, item) in stateItems.enumerated() {
             guard index < rows.count else { item.isHidden = true; continue }
             item.isHidden = false
             let (label, value) = rows[index]
             item.attributedTitle = Self.row(label: label, value: value)
+        }
+    }
+
+    /// Elenca ogni sensore, dal piu' caldo al piu' freddo.
+    ///
+    /// Si ricostruisce solo a menu aperto: un M2 Air espone una quarantina di
+    /// sensori, e rifare quaranta voci ogni pochi secondi mentre nessuno
+    /// guarda sarebbe lavoro buttato.
+    private func renderSensors() {
+        guard menu.highlightedItem != nil || sensorsRoot.submenu?.numberOfItems == 0
+                || isMenuOpen else { return }
+        guard let submenu = sensorsRoot.submenu else { return }
+        submenu.removeAllItems()
+
+        let readings = controller.temperatures?.all ?? []
+        guard !readings.isEmpty else {
+            let empty = NSMenuItem(title: "Nessun sensore leggibile",
+                                   action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            submenu.addItem(empty)
+            return
+        }
+        for reading in readings {
+            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            item.attributedTitle = Self.row(
+                label: reading.name,
+                value: String(format: "%.1f °C", reading.celsius))
+            submenu.addItem(item)
         }
     }
 
@@ -289,6 +367,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         controller.setKeepAwake(Self.awakeModes[index])
     }
 
+    @objc private func selectBarDisplay(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let option = Preferences.BarDisplay(rawValue: raw) else { return }
+        Preferences.barDisplay = option
+        render()
+    }
+
     @objc private func toggleDisplay() {
         controller.setKeepDisplayOn(!controller.keepAwake.keepDisplayOn)
     }
@@ -350,6 +435,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
+        isMenuOpen = true
         poller.setForeground(true)
         controller.refreshState()
         // I watt costano un powermetrics: si chiedono solo mentre qualcuno
@@ -358,6 +444,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func menuDidClose(_ menu: NSMenu) {
+        isMenuOpen = false
         poller.setForeground(false)
     }
 }
