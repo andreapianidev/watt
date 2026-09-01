@@ -539,15 +539,18 @@ enum CommandLineMode {
             print(L("Nothing to explain: nothing is limiting this Mac."))
             return
         }
-        if let unavailable = MainActor.assumeIsolated({ Explainer.unavailable }) {
-            fail(MainActor.assumeIsolated { unavailable.message })
+        if let unavailable = Explainer.unavailable {
+            fail(unavailable.message)
         }
 
-        // Da riga di comando non c'e' un ciclo di run da tenere vivo: si
-        // aspetta il risultato e basta.
+        // Il lavoro gira **fuori** dal main actor, e il thread principale si
+        // blocca ad aspettarlo. Se girasse sul main actor non partirebbe
+        // nemmeno: il main actor e' proprio quello fermo qui sotto, e
+        // `--explain` resterebbe appeso per sempre. E' successo, ed e' stato
+        // riprodotto prima di ripararlo.
         let semaphore = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var output: String?
-        Task { @MainActor in
+        Task.detached {
             defer { semaphore.signal() }
             do {
                 let explanation = try await Explainer.explain(finding)
@@ -559,8 +562,13 @@ enum CommandLineMode {
         }
         semaphore.wait()
         print(L("in plain language:"))
-        print("      " + wrap(output ?? "").replacingOccurrences(
-            of: "\n            ", with: "\n      "))
+        // Ogni riga rientrata allo stesso modo, comprese quelle nate dal
+        // capoverso fra la constatazione e il rimedio: `wrap` allinea solo
+        // le righe che manda a capo lui.
+        for riga in (output ?? "").split(separator: "\n", omittingEmptySubsequences: false) {
+            print("      " + wrap(String(riga)).replacingOccurrences(
+                of: "\n            ", with: "\n      "))
+        }
         print("")
     }
 

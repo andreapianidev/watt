@@ -65,7 +65,7 @@ diagnosi:
 $ Watt --diagnose
 
 !! LA RAM NON BASTA: IL SISTEMA STA SCRIVENDO SU DISCO
-      12 MB/s su swap adesso, 5,69 GB in uso, 1,90 GB compressi
+      5,69 GB di swap in uso, 1,90 GB compressi
       → Chiudi ciò che non ti serve adesso — i più ingombranti sono
         Unity (1,1 GB), WebKit (0,6 GB). «Libera memoria» non aiuta in
         questo caso: purge scarta la cache dei file, non riporta in RAM
@@ -74,7 +74,13 @@ $ Watt --diagnose
         una in RAM, e nessun profilo energetico la sposta di un microsecondo
 ```
 
-È una esecuzione reale sulla macchina di sviluppo, con Unity aperto. Il Mac
+È una esecuzione reale sulla macchina di sviluppo, con Unity aperto, ed è
+riportata com'è uscita. Oggi lo stesso verdetto apre anche con la velocità,
+perché lo swap occupato da solo si è rivelato non voler dire niente: macOS non
+lo restituisce finché non gli serve la stanza, quindi restano gigabyte lì per
+giorni con la pressione di memoria verde e nemmeno una pagina che si muove. A
+far scattare l'avviso adesso sono le pagine al secondo che vanno su disco. Il
+Mac
 **non** era limitato dal calore né dalla CPU: stava swappando, e nessuno dei
 quattro profili tocca quel problema. Quattro volte su cinque il collo di
 bottiglia non è quello che immagini, ed è esattamente il motivo per cui un
@@ -102,6 +108,10 @@ in parole semplici:
       Il sistema sta scrivendo sul disco invece di usare la memoria.
       Chiudi ciò che non hai bisogno adesso, i più grandi sono Xcode e Chrome.
 ```
+
+Le due frasi sono quelle che il modello ha restituito davvero per quei numeri.
+I numeri invece gli sono stati dati come caso di prova, non letti dai sensori
+in quel momento.
 
 Anche nel menu, sotto la diagnosi, come «Spiegamelo in parole semplici».
 

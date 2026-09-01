@@ -21,7 +21,11 @@ import FoundationModels
 ///
 /// Niente rete, niente chiavi, niente account: il modello è quello di sistema
 /// e l'app resta senza dipendenze.
-@MainActor
+///
+/// **Non è isolato sul main actor, e non deve diventarlo.** Da riga di comando
+/// il thread principale aspetta il risultato bloccandosi: se la generazione
+/// dovesse tornare sul main actor per finire, non finirebbe mai, e `--explain`
+/// resterebbe appeso per sempre. Verificato riproducendo il blocco.
 enum Explainer {
 
     /// Perché la spiegazione non si può avere. `nil` quando si può.

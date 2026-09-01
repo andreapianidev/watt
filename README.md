@@ -99,7 +99,7 @@ worth 0.1%. It is the diagnosis:
 $ Watt --diagnose
 
 !! NOT ENOUGH RAM: THE SYSTEM IS WRITING TO DISK
-      12 MB/s to swap now, 5.69 GB in use, 1.90 GB compressed
+      5.69 GB of swap in use, 1.90 GB compressed
       → Close what you do not need right now — the largest are
         Unity (1.1 GB), WebKit (0.6 GB). "Free memory" will not help
         here: purge discards the file cache, it does not bring back
@@ -108,7 +108,12 @@ $ Watt --diagnose
         than from RAM, and no power profile moves it by a microsecond
 ```
 
-That was a real run on the development machine, with Unity open. The Mac was
+That was a real run on the development machine, with Unity open, and it is
+printed here as it came out. Today the same verdict leads with the rate as
+well, because occupied swap alone turned out not to mean anything: macOS does
+not hand swap back until it needs the room, so gigabytes sit there for days
+with the memory pressure green and not a page moving. What fires the alarm now
+is pages per second going to disk. The Mac was
 **not** thermally limited and **not** CPU-starved — it was swapping, and none
 of the four profiles touches that. Four times out of five the bottleneck is
 not the one you assume, which is exactly why a selector alone is not enough.
@@ -132,6 +137,10 @@ in plain language:
       The system is writing to disk instead of using memory.
       Close what you do not need right now, the largest are Xcode and Chrome.
 ```
+
+The two sentences above are what the model actually returned for those figures.
+The figures themselves were handed to it as a test case, not read from the
+sensors at that moment.
 
 Also in the menu, under the diagnosis, as "Explain this in plain language".
 

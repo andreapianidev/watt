@@ -147,12 +147,16 @@ final class AlertCenter {
     /// Applica pausa e riarmo, poi consegna. Ogni allarme passa di qui: la
     /// logica anti raffica sta in un punto solo, non ripetuta tre volte.
     private func fire(_ kind: Kind, title: String, body: String) {
+        // Il permesso si controlla **prima** di consumare armamento e pausa.
+        // Al contrario, un avviso maturato mentre il permesso non c'era
+        // lasciava dietro di se' una pausa di dieci minuti, e il primo evento
+        // vero dopo la concessione veniva ingoiato senza che nulla lo dicesse.
+        guard authorized else { return }
         if let last = lastNotified[kind],
            Date().timeIntervalSince(last) < quietPeriod { return }
         armed[kind] = false
         lastNotified[kind] = Date()
 
-        guard authorized else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
