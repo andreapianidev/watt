@@ -120,12 +120,20 @@ struct Diagnosis {
                 .map { String(format: "%@ (%.1f GB)", $0.name, $0.memoryMB / 1024) }
                 .joined(separator: ", ")
 
+            // La gravita' la decide quanto si sta muovendo, non quanto swap
+            // risulta allocato: 8 GB fermi da ieri non rallentano niente.
+            let heavy = (memory.swapOutRate ?? 0) > 8_388_608
+                     || memory.pressureLevel >= 4
             findings.append(Finding(
-                severity: memory.swapUsedBytes > 4_294_967_296 ? .critical : .warning,
+                severity: heavy ? .critical : .warning,
                 title: L("Not enough RAM: the system is writing to disk"),
-                measured: L("%@ of swap in use, %@ compressed",
-                            memory.swapText,
-                            MemoryReader.Snapshot.gigabytes(memory.compressedBytes)),
+                measured: memory.swapRateText.map {
+                    L("%@ to swap now, %@ in use, %@ compressed",
+                      $0, memory.swapText,
+                      MemoryReader.Snapshot.gigabytes(memory.compressedBytes))
+                } ?? L("%@ of swap in use, %@ compressed",
+                       memory.swapText,
+                       MemoryReader.Snapshot.gigabytes(memory.compressedBytes)),
                 advice: L("Close what you do not need right now")
                       + (hogs.isEmpty ? "" : L(" — the largest are %@", hogs))
                       + L(". \"Free memory\" will not help here: purge discards "

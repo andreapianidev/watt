@@ -36,6 +36,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let chartView = TemperatureChartView()
     private let chartItem = NSMenuItem()
     private var throttleRoot = NSMenuItem()
+    private var batteryRoot = NSMenuItem()
+    private let batteryChart = BatteryChartView()
+    private let batteryChartItem = NSMenuItem()
 
     /// Le voci della sveglia, nell'ordine in cui compaiono.
     private static let awakeModes: [KeepAwake.Mode] = [
@@ -57,6 +60,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.delegate = self
 
         controller.onChange = { [weak self] in self?.render() }
+
+        // Al passaggio chiaro/scuro si riscrive tutto da capo.
+        //
+        // L'elemento in barra viene aggiornato solo quando simbolo, tinta o
+        // testo cambiano: e' cio' che tiene il costo dell'app sotto il punto
+        // percentuale. Ma un cambio di tema non cambia nessuno dei tre, e
+        // senza questo avviso l'elemento resterebbe con il disegno del tema
+        // precedente fino al primo valore diverso.
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.invalidateAppearance() }
+        }
+
         poller.start()
         render()
     }
@@ -211,7 +229,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         // Righe informative: sola lettura, riflettono lo stato reale letto
         // dal sistema e non il profilo selezionato.
-        for _ in 0..<6 {
+        for _ in 0..<7 {
             let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             menu.addItem(item)
             stateItems.append(item)
@@ -233,6 +251,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         sensorsRoot.image = NSImage(systemSymbolName: "thermometer.variable",
                                     accessibilityDescription: nil)
         menu.addItem(sensorsRoot)
+
+        // La batteria sta in un sottomenu e non fra le righe principali: e'
+        // un dato che si consulta, non che si sorveglia. Cicli e capacita' a
+        // piena carica si muovono di mesi, e tenerli sempre a schermo
+        // occuperebbe tre righe per dire ogni volta la stessa cosa.
+        batteryRoot = NSMenuItem(title: L("Battery"), action: nil, keyEquivalent: "")
+        batteryRoot.submenu = NSMenu()
+        batteryRoot.image = NSImage(systemSymbolName: "battery.100",
+                                    accessibilityDescription: nil)
+        batteryChart.frame = NSRect(x: 0, y: 0, width: 330, height: 150)
+        batteryChartItem.view = batteryChart
+        menu.addItem(batteryRoot)
 
         buildKeepAwakeSubmenu()
 
@@ -309,6 +339,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             cadenceItems.append(item)
         }
         cadenceRoot.submenu = cadenceMenu
+        cadenceRoot.toolTip = L("Measured on an M2 Air with the menu closed: "
+                              + "taking the readings costs about 0.4%% of a core. "
+                              + "Redrawing the menu bar every time the number "
+                              + "changes costs three times as much. Slowing the "
+                              + "refresh helps less than choosing a value that "
+                              + "changes rarely.")
         settingsMenu.addItem(cadenceRoot)
 
         let displayRoot = NSMenuItem(title: L("Show in menu bar"), action: nil,
@@ -407,13 +443,34 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // MARK: - Rendering
 
+    /// `true` dopo il primo disegno completo del menu.
+    ///
+    /// Serve a distinguere "il menu e' chiuso, non ridisegnarlo" da "il menu
+    /// non e' mai stato costruito": senza, alla prima apertura si vedrebbe
+    /// un menu vuoto per la frazione di secondo che passa prima che una
+    /// lettura asincrona faccia scattare il disegno.
+    private var menuRendered = false
+
+    /// Cosa si ridisegna a ogni giro e cosa no.
+    ///
+    /// A menu chiuso l'unica cosa visibile e' l'elemento in barra: tutto il
+    /// resto — sette righe di testo attribuito, tre sottomenu ricostruiti da
+    /// zero, i segni di spunta di quattordici voci — veniva rifatto una
+    /// volta ogni due secondi per nessuno. Fra queste c'era anche
+    /// `Preferences.launchAtLogin`, che dietro l'apparenza di una proprieta'
+    /// e' un dialogo sincrono con `smd`: il pezzo piu' caro dell'intero
+    /// giro, pagato di continuo per aggiornare una spunta dentro un
+    /// sottomenu chiuso.
     private func render() {
-        renderDiagnosis()
         renderStatusItem()
+        guard isMenuOpen || !menuRendered else { return }
+        menuRendered = true
+        renderDiagnosis()
         renderProfileChecks()
         renderStateRows()
         renderKeepAwake()
         renderSensors()
+        renderBattery()
         renderThrottle()
         let suspended = controller.suspendedServices
         suspendItem.title = suspended.isEmpty
@@ -439,22 +496,64 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         launchItem.state = Preferences.launchAtLogin ? .on : .off
     }
 
+    /// Butta via lo stato di "gia' disegnato" e ridisegna tutto.
+    private func invalidateAppearance() {
+        lastSymbol = nil
+        lastTint = nil
+        statusItem.button?.title = ""
+        menuRendered = false
+        render()
+    }
+
     private func renderStatusItem() {
         guard let button = statusItem.button else { return }
         let sample = controller.lastSample
         let pressure = sample?.thermalPressure ?? .unknown
+        let severity = sample?.thermalSeverity ?? .none
 
         // Quando il sistema limita le prestazioni l'elemento cambia colore e
         // simbolo. Un'icona che resta identica mentre perdi il 60% del clock
         // e' inutile: il senso di questa app e' che quel momento si veda.
-        let throttling = pressure.demandsAttention
-        let symbol = throttling
-            ? "exclamationmark.triangle.fill"
-            : controller.profile.symbolName
-        button.image = NSImage(systemSymbolName: symbol,
-                               accessibilityDescription: controller.profile.title)
-        button.contentTintColor = throttling ? .systemRed : nil
-        button.imagePosition = .imageLeading
+        //
+        // Tre stati e non due. Una "Moderata" **misurata** e' gia' un
+        // `throttle: yes` per asitop e merita di essere detta, ma con un
+        // termometro arancione, non con il triangolo rosso che si tiene per
+        // "Pesante": se il segnale piu' grave e quello piu' lieve hanno lo
+        // stesso aspetto, il piu' grave smette di significare qualcosa.
+        let symbol: String
+        let tint: NSColor
+        switch severity {
+        case .alarm:
+            symbol = "exclamationmark.triangle.fill"
+            tint = .systemRed
+        case .notice:
+            symbol = "thermometer.medium"
+            tint = .systemOrange
+        case .none:
+            symbol = controller.profile.symbolName
+            // Bianco esplicito, non `labelColor`. Il colore di sistema segue
+            // l'aspetto dell'applicazione, non quello della barra: con Mac in
+            // modo chiaro e barra scura (uno sfondo scuro basta) il titolo
+            // veniva disegnato nero su nero e spariva. La barra dei menu e'
+            // scura in tutti i casi in cui questa app ha qualcosa da dire.
+            tint = .white
+        }
+        let throttling = severity == .alarm
+        // Assegnare l'immagine invalida la copia dell'elemento che AppKit
+        // tiene in barra e ne forza il ridisegno: e' la voce piu' cara di
+        // tutto il giro di aggiornamento, e per la stragrande maggioranza
+        // dei giri il simbolo e' identico a quello di prima. Confrontare
+        // prima di scrivere costa una comparazione di stringhe.
+        if symbol != lastSymbol {
+            lastSymbol = symbol
+            button.image = NSImage(systemSymbolName: symbol,
+                                   accessibilityDescription: controller.profile.title)
+            button.imagePosition = .imageLeading
+        }
+        if tint != lastTint {
+            lastTint = tint
+            button.contentTintColor = tint
+        }
 
         // Ogni voce mostra una grandezza sola: due numeri accostati in barra
         // dei menu diventano illeggibili appena si affollano altre icone.
@@ -492,16 +591,52 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // capire a colpo d'occhio se la sveglia e' attiva.
             title += " ☕"
         }
-        button.title = " " + title
-        button.toolTip = tooltip(sample: sample, pressure: pressure)
+        // `button.title` da solo prende il colore dall'aspetto corrente e
+        // finisce nero: il colore va scritto nella stringa, dove nessuno lo
+        // rinegozia. `contentTintColor` sopra tinge il simbolo, questo le
+        // cifre.
+        let rendered = " " + title
+        if rendered != lastTitle || tint != lastTitleTint {
+            lastTitle = rendered
+            lastTitleTint = tint
+            button.attributedTitle = NSAttributedString(
+                string: rendered,
+                attributes: [.font: NSFont.menuBarFont(ofSize: 0),
+                             .foregroundColor: tint])
+        }
+
+        // Il tooltip non entra nel disegno, quindi non costa un ridisegno:
+        // si riscrive solo quando cambia, per non sporcare invano lo stato
+        // della vista.
+        let hint = tooltip(sample: sample, pressure: pressure)
+        if hint != button.toolTip { button.toolTip = hint }
     }
+
+    /// Ultimo simbolo e ultima tinta scritti nell'elemento in barra.
+    private var lastSymbol: String?
+    private var lastTint: NSColor?
+    /// Ultimo titolo e suo colore. Servono separati dal simbolo: comporre di
+    /// nuovo la stringa attribuita a ogni giro ridisegna la barra per nulla.
+    private var lastTitle: String?
+    private var lastTitleTint: NSColor?
 
     private func tooltip(sample: PowerSample?, pressure: ThermalPressure) -> String {
         var lines = [L("Watt — %@ profile", controller.profile.title)]
         if let summary = sample?.pCoreSummary { lines.append(L("P-cores: %@", summary)) }
-        lines.append(L("Thermal pressure: %@", pressure.label))
-        if pressure.demandsAttention {
+        // La fonte va detta: "Moderata" da powermetrics e "Moderata" da
+        // ProcessInfo sono due affermazioni con un grado di fiducia diverso,
+        // e chi legge ha il diritto di sapere quale delle due sta guardando.
+        lines.append(L("Thermal pressure: %@ (%@)", pressure.label,
+                       (sample?.thermalPressureSource ?? .unknown).label))
+        if sample?.thermalSeverity == .alarm {
             lines.append(L("Performance is being limited by heat."))
+        } else if sample?.thermalSeverity == .notice {
+            lines.append(L("The system has started limiting something."))
+        }
+        if let battery = controller.batterySnapshot,
+           let percent = battery.chargePercent, let health = battery.healthPercent {
+            lines.append(L("Battery: %d%% · health %.0f%% · %d cycles",
+                           percent, health, battery.cycleCount ?? 0))
         }
         lines.append(L("Keep awake: %@", keepAwakeSummary()))
         if let error = controller.lastError { lines.append(L("Warning: %@", error)) }
@@ -521,18 +656,37 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let temps = controller.temperatures
 
         var rows: [(String, String)] = []
-        if pressure.demandsAttention, let fraction = sample?.pCoreCeilingFraction {
+        if sample?.thermalSeverity == .alarm, let fraction = sample?.pCoreCeilingFraction {
             rows.append((L("Limited by heat"),
                          L("%.0f%% of maximum", fraction * 100)))
         } else {
-            rows.append((L("Thermal"), pressure.label))
+            // Una stima marcata come tale non e' la stessa cosa di una
+            // misura, e il menu deve poterle distinguere senza aprire un
+            // tooltip: "Nominale (stima)" e "Nominale" dicono due cose
+            // diverse su quanto fidarsi.
+            let source = sample?.thermalPressureSource ?? .unknown
+            rows.append((L("Thermal"), source.isMeasured
+                ? pressure.label
+                : L("%@ (estimate)", pressure.label)))
         }
-        rows.append((L("SoC temperature"),
+        // "Picco" e non "temperatura": e' il massimo fra i sensori del die,
+        // che e' il numero che decide quando il sistema comincia a limitare.
+        // La media sta nel grafico, dove serve a dire se scalda tutto il SoC
+        // o un punto solo.
+        rows.append((L("SoC peak"),
                      ThermalSensors.Summary.format(temps?.socCelsius)))
         rows.append((L("P-cores"), sample?.pCoreSummary ?? "n/d"))
         rows.append((L("Package"), sample?.packageWattsText ?? "n/d"))
         rows.append((L("Memory available"),
                      controller.memory?.availableText ?? "n/d"))
+        if let battery = controller.batterySnapshot,
+           let percent = battery.chargePercent {
+            var text = "\(percent)%"
+            if let health = battery.healthPercent {
+                text += L(" · health %.0f%%", health)
+            }
+            rows.append((L("Battery"), text))
+        }
         rows.append((L("Battery / SSD"),
                      ThermalSensors.Summary.format(temps?.batteryCelsius)
                      + " / "
@@ -627,6 +781,147 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    /// Il pannello batteria: capacita', usura, elettrico, alimentatore.
+    ///
+    /// Le grandezze sono quelle che mostra coconutBattery, lette dallo stesso
+    /// posto — il nodo `AppleSmartBattery` del registro IO — piu' due che
+    /// coconutBattery non mostra e che qui hanno senso: la potenza che entra
+    /// nel Mac dall'alimentatore, che e' il consumo del **sistema intero**
+    /// contro quello del solo SoC dato da powermetrics, e la perdita
+    /// dell'alimentatore.
+    ///
+    /// Si ricostruisce solo a menu aperto: sono una ventina di voci per un
+    /// dato che si muove di mesi.
+    private func renderBattery() {
+        guard let submenu = batteryRoot.submenu else { return }
+
+        guard let battery = controller.batterySnapshot else {
+            batteryRoot.title = L("Battery")
+            if submenu.numberOfItems == 0 {
+                submenu.addItem(NSMenuItem(title: L("No battery"), action: nil,
+                                           keyEquivalent: ""))
+            }
+            return
+        }
+
+        // Il titolo si aggiorna sempre: e' l'unica parte visibile a menu
+        // chiuso, e ricostruire venti voci per tenerlo fresco sarebbe uno
+        // spreco.
+        var title = L("Battery")
+        if let percent = battery.chargePercent { title += " \(percent)%" }
+        if let health = battery.healthPercent {
+            title += String(format: " · %.0f%%", health)
+        }
+        batteryRoot.title = title
+        batteryRoot.image = NSImage(systemSymbolName: batterySymbol(battery),
+                                    accessibilityDescription: nil)
+
+        guard isMenuOpen || submenu.numberOfItems == 0 else { return }
+        submenu.autoenablesItems = false
+        submenu.removeAllItems()
+
+        batteryChart.snapshot = battery
+        batteryChart.trend = controller.batteryTrend
+        batteryChart.monthsToEighty = controller.batteryMonthsToEighty
+        batteryChart.trendIsMeaningful = controller.batteryTrendIsMeaningful
+        submenu.addItem(batteryChartItem)
+        submenu.addItem(.separator())
+
+        func add(_ label: String, _ value: String?) {
+            guard let value, !value.isEmpty else { return }
+            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            item.attributedTitle = Self.row(label: label, value: value)
+            submenu.addItem(item)
+        }
+
+        add(L("Charge"), battery.chargePercent.map { "\($0)%" })
+        add(L("State"), battery.stateLabel)
+        add(L("Time"), battery.timeRemainingText)
+
+        submenu.addItem(.separator())
+        // Due percentuali di salute, entrambe vere, calcolate su due campi
+        // diversi del gas gauge. Mostrarne una sola e nascondere l'altra
+        // significa lasciare l'utente davanti a due numeri discordi — il
+        // proprio e quello di Impostazioni di Sistema — senza spiegazione.
+        if let health = battery.healthPercent, let full = battery.fullChargeCapacityMAh,
+           let design = battery.designCapacityMAh {
+            add(L("Health"), String(format: "%.1f%%  (%d / %d mAh)",
+                                    health, full, design))
+        }
+        if let apple = battery.applePercent {
+            add(L("macOS “Maximum Capacity”"), "\(apple)%")
+        }
+        if let cycles = battery.cycleCount {
+            add(L("Cycles"), battery.designCycleCount.map { "\(cycles) / \($0)" }
+                ?? "\(cycles)")
+        }
+        add(L("Condition"), battery.condition)
+        if let design = battery.designWattHours, let full = battery.fullChargeWattHours,
+           let now = battery.remainingWattHours {
+            add(L("Energy (approx.)"),
+                String(format: "%.1f / %.1f / %.1f Wh", now, full, design))
+        }
+        if let degradation = controller.batteryDegradation {
+            add(L("Measured loss"),
+                L("%.2f%% in %.0f days · %d cycles",
+                  degradation.points, degradation.days, degradation.cycles))
+        }
+
+        submenu.addItem(.separator())
+        add(L("Voltage"), battery.voltageMV.map {
+            String(format: "%.2f V", Double($0) / 1000) })
+        add(L("Current"), (battery.amperageMA ?? battery.instantAmperageMA)
+            .map { "\($0) mA" })
+        add(L("Battery power"), battery.batteryWatts.map {
+            String(format: "%+.2f W", $0) })
+        add(L("Temperature"),
+            controller.temperatures?.batteryCelsius.map {
+                String(format: "%.1f °C", $0) })
+
+        // Consumo del sistema intero, non del solo SoC: sono due grandezze
+        // diverse e vanno etichettate come tali, altrimenti sembra che
+        // l'app si contraddica con la riga "Pacchetto" del menu principale.
+        if battery.systemWatts != nil || battery.adapterName != nil {
+            submenu.addItem(.separator())
+            add(L("System from the wall"), battery.systemWatts.map {
+                String(format: "%.1f W", $0) })
+            add(L("Adapter loss"), battery.adapterEfficiencyLossMW.map {
+                String(format: "%.1f W", Double($0) / 1000) })
+            add(L("Adapter"), battery.adapterName)
+            if let watts = battery.adapterWatts {
+                add(L("Negotiated"), battery.adapterVoltageMV.map {
+                    String(format: "%d W  (%.0f V × %.2f A)", watts,
+                           Double($0) / 1000,
+                           Double(battery.adapterCurrentMA ?? 0) / 1000)
+                } ?? "\(watts) W")
+            }
+        }
+
+        submenu.addItem(.separator())
+        add(L("Pack"), battery.deviceName)
+        add(L("Cells"), [battery.cellVendorCode, battery.cellLotCode]
+            .compactMap { $0 }.joined(separator: " · "))
+        add(L("Serial"), battery.serial)
+        if let reason = battery.notChargingReason, reason != 0,
+           battery.isCharging != true {
+            // Codice grezzo, non tradotto: i bit non sono documentati, e
+            // battezzarli "carica ottimizzata" a naso sarebbe inventare una
+            // misura. Chi indaga puo' cercarlo; l'app non finge di saperlo.
+            add(L("Not charging (raw code)"), String(format: "0x%X", reason))
+        }
+    }
+
+    private func batterySymbol(_ battery: BatterySnapshot) -> String {
+        if battery.isCharging == true { return "battery.100.bolt" }
+        switch battery.chargePercent ?? 100 {
+        case ..<10:  return "battery.0"
+        case ..<35:  return "battery.25"
+        case ..<60:  return "battery.50"
+        case ..<85:  return "battery.75"
+        default:     return "battery.100"
+        }
+    }
+
     private func renderKeepAwake() {
         keepAwakeRoot.title = L("Keep awake: %@", keepAwakeSummary())
         // La precisazione sul profilo che impedisce comunque la sospensione
@@ -684,9 +979,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // far stare un'etichetta lunga gonfia l'intero menu.
         paragraph.tabStops = [NSTextTab(textAlignment: .right, location: 260)]
 
+        // Il colore va dichiarato anche sull'etichetta.
+        //
+        // Un `NSAttributedString` senza `.foregroundColor` non eredita il
+        // colore del tema: ripiega sul nero. In modo chiaro il nero e' il
+        // colore giusto per caso, e il difetto resta invisibile; al primo
+        // passaggio a modo scuro la meta' sinistra di ogni riga diventa nera
+        // su fondo nero. Il valore a destra il colore ce l'aveva gia', ed e'
+        // il motivo per cui sparivano le etichette e non i numeri.
         let attributed = NSMutableAttributedString(
             string: label + "\t",
             attributes: [.font: NSFont.menuFont(ofSize: 0),
+                         .foregroundColor: NSColor.labelColor,
                          .paragraphStyle: paragraph])
         attributed.append(NSAttributedString(
             string: value,

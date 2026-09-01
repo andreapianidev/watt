@@ -24,6 +24,11 @@ enum MemoryReader {
         /// Livello di pressione riportato dal kernel: 1 normale, 2 avvertimento,
         /// 4 critico.
         var pressureLevel: Int32 = 1
+        /// Byte al secondo scritti su swap fra questo campione e il precedente.
+        ///
+        /// `nil` al primo campione: non c'e' ancora un intervallo su cui
+        /// misurare, e un singolo contatore cumulativo non dice niente.
+        var swapOutRate: Double?
 
         /// Quello che macOS considera davvero disponibile: la memoria libera
         /// piu' quella inattiva, che il sistema puo' riassegnare all'istante.
@@ -33,9 +38,29 @@ enum MemoryReader {
         var freeText: String { Snapshot.gigabytes(freeBytes) }
         var swapText: String { Snapshot.gigabytes(swapUsedBytes) }
 
-        /// `true` quando il sistema sta scrivendo memoria su disco in
-        /// quantita' rilevante. Sotto questa soglia lo swap e' fisiologico.
-        var isSwapping: Bool { swapUsedBytes > 1_073_741_824 }
+        /// `true` quando il sistema *sta* scrivendo memoria su disco adesso.
+        ///
+        /// Non basta guardare quanto swap risulta occupato. macOS non lo
+        /// restituisce finche' non gli serve altro spazio, quindi dopo una
+        /// singola compilazione pesante restano gigabyte di swap allocato per
+        /// giorni, a pressione di memoria verde e senza che una pagina si
+        /// muova: era la ragione per cui l'avviso "la RAM non basta" restava
+        /// acceso sempre. Il segnale e' il movimento, non l'occupazione.
+        ///
+        /// Un mebibyte al secondo sostenuto e' la soglia: sotto, e' il
+        /// respiro normale del compressore, e non c'e' niente da dire.
+        var isSwapping: Bool {
+            if let swapOutRate { return swapOutRate > 1_048_576 }
+            // Primo campione: nessun intervallo su cui misurare. Si ripiega
+            // sul kernel, che almeno distingue il verde dal giallo.
+            return pressureLevel >= 2 && swapUsedBytes > 1_073_741_824
+        }
+
+        /// Velocita' di scrittura su swap in forma leggibile, per la riga di
+        /// misura della diagnosi.
+        var swapRateText: String? {
+            swapOutRate.map { String(format: "%.0f MB/s", $0 / 1_048_576) }
+        }
 
         static func gigabytes(_ bytes: UInt64) -> String {
             String(format: "%.2f GB", Double(bytes) / 1_073_741_824)
@@ -69,7 +94,40 @@ enum MemoryReader {
             totalBytes: ProcessInfo.processInfo.physicalMemory,
             swapUsedBytes: swap.used,
             swapTotalBytes: swap.total,
-            pressureLevel: pressureLevel())
+            pressureLevel: pressureLevel(),
+            swapOutRate: previous.rate(swapoutPages: stats.swapouts, pageSize: page))
+    }
+
+    /// Contatore precedente delle pagine scritte su swap, con il momento in
+    /// cui e' stato letto.
+    ///
+    /// Sta fuori dallo `Snapshot` perche' e' stato del lettore, non del
+    /// campione. Ha un lucchetto proprio invece di un attore: `read()` viene
+    /// chiamata sia dalla app in barra sia dalla modalita' a riga di comando,
+    /// che non condividono isolamento.
+    private static let previous = SwapCounter()
+
+    private final class SwapCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pages: UInt64 = 0
+        private var timestamp: TimeInterval = 0
+
+        func rate(swapoutPages: UInt64, pageSize: UInt64) -> Double? {
+            lock.lock()
+            defer { lock.unlock() }
+            let now = ProcessInfo.processInfo.systemUptime
+            let previousPages = pages
+            let previousTime = timestamp
+            pages = swapoutPages
+            timestamp = now
+            // Primo giro, orologio fermo, o contatore azzerato da un riavvio:
+            // non c'e' una velocita' da dichiarare, e inventarne una zero
+            // sarebbe una misura falsa invece di un dato mancante.
+            guard previousTime > 0, now > previousTime,
+                  swapoutPages >= previousPages else { return nil }
+            return Double((swapoutPages - previousPages) * pageSize)
+                 / (now - previousTime)
+        }
     }
 
     /// Uso dello swap via `sysctl vm.swapusage`, senza lanciare processi.

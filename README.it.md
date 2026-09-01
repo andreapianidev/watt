@@ -17,31 +17,9 @@ invece di lasciartelo scoprire aspettando.
 
 </div>
 
-```
-┌──────────────────────────────────────┐
-│ ⚠️ 1.19 GHz · 91°           ← in barra│
-├──────────────────────────────────────┤
-│  PRESTAZIONI LIMITATE   34% del max  │
-│  Temperatura SoC              91 °C  │
-│  P-core            1.19 di 3.50 GHz  │
-│  Pacchetto                    3.5 W  │
-│  Memoria disponibile         2.4 GB  │
-│  Batteria / SSD          39° / 46°   │
-├──────────────────────────────────────┤
-│      ╭─────────────────────────╮     │
-│      │  ╱╲    grafico 20 min   │     │
-│      │ ╱  ╲___╱╲___ max        │     │
-│      │╱─────────── media       │     │
-│      ╰─────────────────────────╯     │
-├──────────────────────────────────────┤
-│  ● Risparmio  Automatico             │
-│    Prestazioni  Massimo              │
-├──────────────────────────────────────┤
-│  Sveglia: durante le build (cargo)   │
-│  Congela i servizi differibili       │
-│  Tutti i sensori              ▸      │
-└──────────────────────────────────────┘
-```
+<div align="center">
+  <img src="docs/watt-menu.png" alt="L'elemento di Watt in barra dei menu e il suo pannello: frequenza e temperatura in barra, diagnosi delle limitazioni, profili di potenza, misure in tempo reale e grafico della temperatura" width="380">
+</div>
 
 ---
 
@@ -224,7 +202,8 @@ Watt la interroga direttamente.
 | Frequenza P/E-core | IOReport, `CPU Complex Performance States` | nessuno |
 | Tetto DVFS | nodo `pmgr` del registro IO, `voltage-states` | nessuno |
 | Temperature | servizi HID nella pagina Apple Vendor | nessuno |
-| Pressione termica | `ProcessInfo.thermalState` | nessuno |
+| Pressione termica | `com.apple.system.thermalpressurelevel`, notify(3) | nessuno |
+| Batteria, alimentatore, presa | `AppleSmartBattery` nel registro IO | nessuno |
 | Memoria | `host_statistics64` | nessuno |
 | Watt del package | `powermetrics`, solo a menu aperto | root |
 | Applicare i profili | `pmset`, `mdutil`, `tmutil`, `taskpolicy`, `purge` | root |
@@ -239,7 +218,34 @@ Conseguenze concrete:
 
 Le frequenze si ricavano dalle residenze per stato DVFS, escludendo gli stati
 di riposo: la domanda a cui la barra risponde è *a che velocità gira quando
-lavora*, non *quanto ha lavorato*.
+lavora*, non *quanto ha lavorato*. Non è la stessa definizione che
+`powermetrics` usa per `freq_hz`, che media su tutto l'intervallo. A cluster
+saturo le due coincidono **alla cifra** — `--verify-freq` sotto carico dà
+scarto 0 MHz su entrambi i cluster; a cluster fermo divergono di centinaia di
+megahertz e hanno ragione tutt'e due, perché stanno rispondendo a due domande
+diverse. `--verify-freq` adesso scarta i campioni in cui una delle due parti
+dichiara più del 10% di riposo, e lo scrive.
+
+### La pressione termica senza `powermetrics`
+
+Neanche `powermetrics` misura la pressione termica: la legge. Fra le stringhe
+del suo binario c'è `thermal pressure notifications`, e la notifica in
+questione è `kOSThermalNotificationPressureLevelName` di
+`<libkern/OSThermalNotification.h>`, cioè la chiave notify(3)
+`com.apple.system.thermalpressurelevel`. Il kernel ci pubblica un intero, su
+macOS da 0 a 4, che corrisponde uno a uno ai nomi che `powermetrics` stampa
+in `thermal_pressure` — lo stesso campo che asitop riduce a
+`throttle: yes/no`.
+
+Watt quindi la legge direttamente. Verificata appaiata con `powermetrics`
+sugli stessi istanti da `Watt --verify-pressure`: accordo su tutti i campioni,
+compresa una transizione `Heavy → Moderate` colta a metà. Costa **0,01 ms**
+contro i ~500 ms di un campione di `powermetrics`, non richiede root e
+funziona con l'helper disinstallato — il che significa che la misura vera è
+disponibile **sempre**, non solo a menu aperto. `ProcessInfo.thermalState`
+resta come ultimo ripiego ed è etichettato come stima quando viene usato: è
+più grosso di grana, ed è stato osservato dire `Moderata` mentre la misura
+diceva `Pesante`.
 
 I simboli IOReport e IOHID non sono dichiarati in header pubblici e si
 risolvono a runtime: se un aggiornamento di macOS li spostasse, Watt perde
@@ -256,13 +262,103 @@ quelle letture e continua a funzionare invece di crollare.
 | **Archiviazione** | `NAND CH*` |
 | **Batteria** | `gas gauge battery` |
 
-Il menu mostra il **massimo** fra i sensori `tdie`, non la media: è il punto
-più caldo a decidere quando il sistema limita.
+La barra dei menu mostra il **massimo** fra i sensori `tdie`, mai la media:
+è il punto più caldo a decidere quando il sistema limita. La media sta nel
+grafico, dove risponde a un'altra domanda — se scalda tutto il SoC o un
+punto solo.
 
-**Costo, misurato:** leggere tutti e 39 i sensori richiede 52 ms, i soli 16
-sul die 17 ms. La barra legge solo questi ultimi; l'elenco completo si legge
-quando lo apri. A un aggiornamento al secondo sono ~1,7% di un core, e la
-voce di menu lo scrive accanto a ciascuna cadenza invece di nasconderlo.
+**Costo, misurato** (`Watt --bench` su M2 Air): tutti e 35 i sensori 52 ms,
+i soli 16 del die 19 ms, la lettura adattiva 6 ms. L'adattiva legge a ogni
+giro i quattro sensori più caldi conosciuti, rilegge il die intero ogni dieci
+giri, e lo rilegge **subito** ogni volta che l'insieme caldo si muove di più
+di 2 °C — soglia scelta sopra il rumore del sensore, che lo stesso benchmark
+misura in circa 0,5 °C fra due letture complete consecutive.
+
+Di quello schema sono stati corretti due artefatti, trovati entrambi
+guardando quanti sensori entrano in ciascun giro con `Watt --watch-temps`:
+
+- la **media** veniva calcolata su qualunque sensore fosse stato letto in
+  quel giro: 4 sensori caldi del die nei giri veloci, 16 del die più
+  batteria e SSD in quelli completi. La media saltava di 6 °C ogni dieci
+  giri — un dente di sega perfetto, che si legge come throttling
+  intermittente e non lo è. Adesso massimo e media stanno su tutta la
+  popolazione del die, con l'ultimo valore noto per i sensori non riletti;
+- il **massimo** era il massimo di quattro sensori in nove giri su dieci. Se
+  il carico si spostava su un cluster fuori dall'insieme caldo, il picco in
+  barra era sottostimato fino a venti secondi — cioè proprio quando qualcuno
+  lo sta guardando. La rilettura innescata dal movimento chiude quella
+  finestra.
+
+### Quanto costa l'app
+
+Misurato su M2 Air a menu chiuso, campionando il processo:
+
+| cosa c'è in barra | cadenza | costo |
+|:--|:--|:--|
+| frequenza + picco | 2 s | 1,9% di un core |
+| solo picco | 2 s | 1,2% |
+| un valore che cambia di rado | 10 s | 0,4% |
+
+Il campionamento vero e proprio è quello 0,4%. Tutto il resto è AppKit che
+ridisegna l'elemento in barra ogni volta che il testo cambia — nel profilo
+del processo è `NSStatusItem _updateReplicants`, due terzi del totale. Da
+cui: rallentare la cadenza aiuta molto meno di quanto sembri, e scegliere una
+grandezza che cambia di rado aiuta molto di più. Il menu della cadenza
+scriveva una percentuale per ciascuna opzione, ricavata dai soli tempi di
+lettura dei sensori: erano numeri sbagliati e sono stati tolti invece che
+corretti — un numero misurato male è peggio di nessun numero.
+
+---
+
+## 🔋 Batteria
+
+Tutto quello che mostra coconutBattery, letto da dove lo legge lui — il nodo
+`AppleSmartBattery` del registro IO, senza privilegi — più due cose che lui
+non mostra e che qui hanno senso.
+
+| | |
+|:--|:--|
+| Salute | capacità a piena carica ÷ capacità di progetto, in mAh |
+| «Capacità massima» di macOS | capacità *nominale* ÷ progetto, troncata |
+| Cicli | contati e di progetto |
+| Elettrico | tensione del pacco, corrente, watt in entrata o uscita |
+| Alimentatore | modello, watt negoziati, volt × ampere, seriale |
+| Sistema dalla presa | quanto assorbe **tutto il Mac**, in watt |
+| Perdita alimentatore | quanto si brucia nell'alimentatore |
+| Pacco | modello del gas gauge, fabbricante e lotto delle celle, firmware |
+
+**Due percentuali di salute, entrambe giuste.** Watt dice 80,3% e
+Impostazioni di Sistema dice 82%, e non mente nessuno dei due: il numero di
+coconutBattery è `FullChargeCapacity ÷ DesignCapacity` (4626 ÷ 5760), quello
+di Apple parte da `NominalChargeCapacity` — la stima filtrata dal gas gauge —
+e tronca invece di arrotondare (4770 ÷ 5760 = 82,8% → 82%). Mostrarne uno e
+nascondere l'altro lascia davanti a due numeri discordi senza spiegazione,
+quindi Watt li mostra tutt'e due e li etichetta.
+
+**La potenza dalla presa** viene da `PowerTelemetryData` ed è una grandezza
+diversa dai watt del package di `powermetrics`: quelli sono il SoC, questi
+sono la macchina intera, schermo compreso. Sono etichettati separatamente per
+questo.
+
+**Il degrado nel tempo** sta su disco, in JSON leggibile, in
+`~/Library/Application Support/Watt/battery-history.json`: un punto ogni sei
+ore, più uno ogni volta che il contatore dei cicli avanza. È l'unica cosa che
+Watt scrive oltre alle preferenze, perché è l'unica grandezza il cui senso
+sta proprio nel muoversi lentamente.
+
+Il grafico si rifiuta di disegnare una curva prima di avere una settimana di
+storico, e la «perdita misurata» media i primi e gli ultimi punti invece di
+prendere due letture isolate. Servono entrambi i freni perché il gas gauge
+ristima di continuo la capacità a piena carica: in ventiquattro minuti di
+prova ha oscillato di 76 mAh — un punto e mezzo di «salute», avanti e
+indietro. Una versione precedente annotava un punto a ogni variazione e
+disegnava quel tremolio come se fosse invecchiamento. Venti minuti di rumore
+che sembrano un anno di usura sono peggio di nessun grafico.
+
+Niente viene dedotto da bit non documentati. Quando il Mac è collegato e non
+carica, Watt scrive «collegato, non in carica» e stampa il codice grezzo di
+`NotChargingReason`; non indovina «carica ottimizzata» da una configurazione
+di bit che nessuno ha documentato.
 
 ---
 
@@ -289,6 +385,7 @@ L'app **è** anche la CLI, pensata per gli script di build:
 ```bash
 Watt --status                  # frequenze, temperature, stato
 Watt --temps                   # tutti i sensori, dal più caldo
+Watt --battery                 # salute, cicli, alimentatore, presa
 Watt --apply massimo           # applica un profilo
 Watt --suspend / --resume      # congela i servizi differibili
 Watt --throttle / --unthrottle # rallenta i background che consumano
@@ -350,10 +447,64 @@ parentesi è l'ID personale dello sviluppatore e differisce dal team. Usarlo
 produce un requisito che nessuna firma potrà soddisfare, e l'helper
 rifiuterebbe la propria stessa app senza dire perché.
 
+### Rilasciare
+
+```bash
+./scripts/release.sh --check     # verifica i prerequisiti e si ferma
+./scripts/release.sh --app-only  # notarizza e mette la graffetta sulla .app
+./scripts/release.sh             # …più un DMG notarizzato e graffettato
+```
+
+Compila, firma con Developer ID, notarizza tramite App Store Connect, applica
+la graffetta, impacchetta in un DMG, notarizza e graffetta anche quello, poi
+verifica il risultato con `spctl` — che è il giudizio di Gatekeeper, l'unico
+che conta: una firma può essere perfettamente valida, passare
+`codesign --verify`, ed essere comunque bloccata perché non è mai stata
+notarizzata.
+
+Le credenziali non entrano mai nel repository. A `notarytool` viene passata
+una chiave API di App Store Connect letta da
+`~/.secrets/appstoreconnect-api.env`, il che evita di far transitare del tutto
+una password dall'ambiente.
+
+Due cose che fanno fallire la notarizzazione in silenzio, e che qui sono
+gestite:
+
+- **la marca temporale sicura.** Apple rifiuta qualunque firma che non ne
+  abbia una, con un errore che non nomina mai la marca temporale. `build.sh`
+  non la mette per impostazione predefinita — renderebbe impossibile una build
+  offline — quindi `release.sh` la accende con `WATT_TIMESTAMP=1`;
+- **il certificato.** `build.sh` ripiega su *Apple Development* quando non
+  trova un Developer ID, e l'app che ne esce gira benissimo sulla macchina che
+  l'ha compilata e su nessun'altra. Apple non la notarizza. `release.sh` si
+  rifiuta di partire invece di scoprirlo dopo il caricamento.
+
+**Una build `WATT_UNSIGNED=1` non va distribuita mai.** La firma ad-hoc
+imposta `skipClientVerification`, che disattiva il controllo di codesign che
+l'helper fa sui propri client XPC — cioè un demone root che accetta qualunque
+chiamante. Esiste perché il progetto compili senza certificato, nient'altro.
+
+### Perché non il Mac App Store
+
+Lì il sandbox è obbligatorio, e Watt ha bisogno di due cose che il sandbox
+vieta: un LaunchDaemon che gira come root (per `pmset`, `mdutil`, `tmutil`,
+`taskpolicy`, `purge`, `powermetrics` e il SIGSTOP ai servizi differibili) e
+diciassette simboli risolti a runtime che non sono dichiarati in header
+pubblici — `IOHIDEventSystemClient*` per le temperature, `IOReport*` per le
+frequenze. Togliendoli resta batteria e memoria: un'altra app, e senza niente
+di particolare da dire. Tutti gli strumenti di questa categoria si
+distribuiscono così, per lo stesso motivo.
+
 ### Diagnostica
 
 ```bash
 ./scripts/thermal-curve.sh [campioni] [intervallo]  # misura il throttling
+Watt --bench                                        # costo di un giro
+Watt --load 8 60                                    # carico a QoS alta
+Watt --verify-freq 5                                # IOReport vs powermetrics
+Watt --verify-pressure 10                           # kernel vs powermetrics
+Watt --watch-temps 40                               # sensori letti per giro
+Watt --debug-freq                                   # la frequenza, stato per stato
 watt-helper --sample                                # campiona come via XPC
 watt-helper --parse campione.plist                  # verifica il parser
 WATT_DEBUG=1 sudo ./scripts/install-helper.sh       # stderr su file
