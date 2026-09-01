@@ -539,21 +539,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             tint = .white
         }
         let throttling = severity == .alarm
-        // Assegnare l'immagine invalida la copia dell'elemento che AppKit
-        // tiene in barra e ne forza il ridisegno: e' la voce piu' cara di
-        // tutto il giro di aggiornamento, e per la stragrande maggioranza
-        // dei giri il simbolo e' identico a quello di prima. Confrontare
-        // prima di scrivere costa una comparazione di stringhe.
-        if symbol != lastSymbol {
-            lastSymbol = symbol
-            button.image = NSImage(systemSymbolName: symbol,
-                                   accessibilityDescription: controller.profile.title)
-            button.imagePosition = .imageLeading
-        }
-        if tint != lastTint {
-            lastTint = tint
-            button.contentTintColor = tint
-        }
 
         // Ogni voce mostra una grandezza sola: due numeri accostati in barra
         // dei menu diventano illeggibili appena si affollano altre icone.
@@ -591,18 +576,30 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // capire a colpo d'occhio se la sveglia e' attiva.
             title += " ☕"
         }
-        // `button.title` da solo prende il colore dall'aspetto corrente e
-        // finisce nero: il colore va scritto nella stringa, dove nessuno lo
-        // rinegozia. `contentTintColor` sopra tinge il simbolo, questo le
-        // cifre.
-        let rendered = " " + title
-        if rendered != lastTitle || tint != lastTitleTint {
-            lastTitle = rendered
-            lastTitleTint = tint
-            button.attributedTitle = NSAttributedString(
-                string: rendered,
-                attributes: [.font: NSFont.menuBarFont(ofSize: 0),
-                             .foregroundColor: tint])
+        // Simbolo e cifre in una sola immagine, disegnata qui.
+        //
+        // La barra dei menu non lascia decidere il colore del titolo: quello
+        // di un `NSStatusBarButton` viene ridisegnato con il colore
+        // dell'aspetto della barra, e `attributedTitle` e `contentTintColor`
+        // vengono scavalcati senza dire niente. E' la ragione per cui le
+        // cifre restavano nere su barra chiara nonostante il bianco imposto.
+        //
+        // Un'immagine con `isTemplate = false` arriva a schermo esattamente
+        // come e' stata disegnata: nessuno la ricolora. Costa un disegno per
+        // ogni cambio di testo, quindi si ridisegna solo quando testo,
+        // simbolo o colore cambiano davvero.
+        if title != lastTitle || symbol != lastSymbol || tint != lastTint {
+            lastTitle = title
+            lastSymbol = symbol
+            lastTint = tint
+            button.image = Self.barImage(
+                symbol: symbol, title: title, color: tint,
+                accessibility: controller.profile.title)
+            button.imagePosition = .imageOnly
+            button.title = ""
+            // Con un'immagine non-template la tinta non si applica, ma
+            // lasciarla impostata confonde chi legge il codice dopo.
+            button.contentTintColor = nil
         }
 
         // Il tooltip non entra nel disegno, quindi non costa un ridisegno:
@@ -612,13 +609,59 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if hint != button.toolTip { button.toolTip = hint }
     }
 
-    /// Ultimo simbolo e ultima tinta scritti nell'elemento in barra.
+    /// Ultimo contenuto disegnato in barra. Ridisegnare l'immagine e'
+    /// l'operazione piu' cara del giro di aggiornamento, e per la gran parte
+    /// dei giri non e' cambiato niente: tre confronti costano meno.
     private var lastSymbol: String?
     private var lastTint: NSColor?
-    /// Ultimo titolo e suo colore. Servono separati dal simbolo: comporre di
-    /// nuovo la stringa attribuita a ogni giro ridisegna la barra per nulla.
     private var lastTitle: String?
-    private var lastTitleTint: NSColor?
+
+    /// Compone simbolo e cifre in un'unica immagine non-template.
+    ///
+    /// Non-template e' il punto di tutto: un'immagine template viene
+    /// ricolorata dalla barra dei menu secondo il proprio aspetto, ed e'
+    /// esattamente il comportamento da cui questo codice si sta sottraendo.
+    private static func barImage(symbol: String,
+                                 title: String,
+                                 color: NSColor,
+                                 accessibility: String) -> NSImage? {
+        let font = NSFont.menuBarFont(ofSize: 0)
+        let text = NSAttributedString(
+            string: title,
+            attributes: [.font: font, .foregroundColor: color])
+        let textSize = text.size()
+
+        let glyph = NSImage(systemSymbolName: symbol,
+                            accessibilityDescription: accessibility)?
+            .withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: font.pointSize,
+                                            weight: .regular))
+        let glyphSize = glyph?.size ?? .zero
+        let gap: CGFloat = glyphSize.width > 0 && !title.isEmpty ? 4 : 0
+        let size = NSSize(width: ceil(glyphSize.width + gap + textSize.width),
+                          height: ceil(max(glyphSize.height, textSize.height)))
+        guard size.width > 0, size.height > 0 else { return nil }
+
+        let image = NSImage(size: size)
+        image.lockFocus()
+        if let glyph {
+            let box = NSRect(x: 0,
+                             y: ((size.height - glyphSize.height) / 2).rounded(),
+                             width: glyphSize.width, height: glyphSize.height)
+            glyph.draw(in: box)
+            // Il simbolo arriva nero: lo si ricolora dipingendo sopra solo
+            // dove ha lasciato pixel. `sourceAtop` fa esattamente questo, e
+            // resta dentro il riquadro del simbolo senza toccare le cifre.
+            color.set()
+            box.fill(using: .sourceAtop)
+        }
+        text.draw(at: NSPoint(x: glyphSize.width + gap,
+                              y: ((size.height - textSize.height) / 2).rounded()))
+        image.unlockFocus()
+        image.isTemplate = false
+        image.accessibilityDescription = accessibility
+        return image
+    }
 
     private func tooltip(sample: PowerSample?, pressure: ThermalPressure) -> String {
         var lines = [L("Watt — %@ profile", controller.profile.title)]
