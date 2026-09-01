@@ -132,9 +132,34 @@ enum Preferences {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: intervalKey) }
     }
 
-    static var alertsEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "alertsEnabled") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "alertsEnabled") }
+    /// Stato di un singolo allarme.
+    ///
+    /// Le versioni fino alla 1.x avevano un interruttore solo, `alertsEnabled`,
+    /// e riguardava la sola temperatura. Chi lo aveva spento va lasciato
+    /// spento: leggere la chiave vecchia come valore iniziale della nuova
+    /// evita che un aggiornamento riaccenda avvisi che qualcuno aveva
+    /// deliberatamente tolto.
+    static func alertEnabled(_ kind: AlertCenter.Kind) -> Bool {
+        let key = "alert.\(kind.rawValue)"
+        if let stored = UserDefaults.standard.object(forKey: key) as? Bool {
+            return stored
+        }
+        if kind == .temperature,
+           let legacy = UserDefaults.standard.object(forKey: "alertsEnabled") as? Bool {
+            return legacy
+        }
+        return kind.enabledByDefault
+    }
+
+    static func setAlertEnabled(_ kind: AlertCenter.Kind, _ value: Bool) {
+        UserDefaults.standard.set(value, forKey: "alert.\(kind.rawValue)")
+    }
+
+    /// `true` se almeno un allarme è acceso: sotto questa condizione ha senso
+    /// chiedere il permesso di notifica, e sopra è una finestra di sistema
+    /// mostrata per niente.
+    static var anyAlertEnabled: Bool {
+        AlertCenter.Kind.allCases.contains { alertEnabled($0) }
     }
 
     static var alertThreshold: Double {
@@ -143,6 +168,17 @@ enum Preferences {
             return stored > 0 ? stored : 90
         }
         set { UserDefaults.standard.set(newValue, forKey: "alertThreshold") }
+    }
+
+    /// Spiegazioni in parole semplici col modello di Apple Intelligence.
+    ///
+    /// Acceso di suo: gira sul dispositivo, non manda niente in rete e la
+    /// voce compare solo dove il modello c'è davvero. Resta spegnibile perché
+    /// il testo lo scrive un modello, e chi vuole solo i numeri misurati ha
+    /// diritto di non vederselo proposto.
+    static var explanationsEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "explanationsEnabled") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "explanationsEnabled") }
     }
 
     static var keepDisplayOn: Bool {

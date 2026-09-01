@@ -32,7 +32,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var cadenceItems: [NSMenuItem] = []
     private var suspendItem = NSMenuItem()
     private var diagnosisRoot = NSMenuItem()
-    private var alertsToggle = NSMenuItem()
+    private var alertItems: [NSMenuItem] = []
+    private var explanationsItem = NSMenuItem()
     private let chartView = TemperatureChartView()
     private let chartItem = NSMenuItem()
     private var throttleRoot = NSMenuItem()
@@ -152,6 +153,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 action.representedObject = index
                 submenu.addItem(action)
             }
+        }
+
+        // La spiegazione in parole semplici compare solo se il modello c'e'
+        // davvero e non e' stata disattivata. Una voce che al clic si scusa
+        // e' peggio di una voce assente.
+        if Explainer.isOffered, findings.contains(where: { $0.severity > .ok }) {
+            submenu.addItem(.separator())
+            let explain = NSMenuItem(title: L("Explain this in plain language"),
+                                     action: #selector(explainDiagnosis),
+                                     keyEquivalent: "")
+            explain.target = self
+            explain.image = NSImage(systemSymbolName: "apple.intelligence",
+                                    accessibilityDescription: nil)
+            submenu.addItem(explain)
         }
     }
 
@@ -304,16 +319,29 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let settingsMenu = NSMenu()
         settingsMenu.autoenablesItems = false
 
-        let alertsRoot = NSMenuItem(title: L("Temperature alerts"), action: nil,
+        let alertsRoot = NSMenuItem(title: L("Alerts"), action: nil,
                                     keyEquivalent: "")
         let alertsMenu = NSMenu()
         alertsMenu.autoenablesItems = false
-        alertsToggle = NSMenuItem(title: L("Warn me when it gets hot"),
-                                  action: #selector(toggleAlerts), keyEquivalent: "")
-        alertsToggle.target = self
-        alertsMenu.addItem(alertsToggle)
+        // Un interruttore per tipo di allarme. Chi compila tutto il giorno
+        // vuole sapere dello swap e non della temperatura, chi monta video il
+        // contrario: un interruttore solo costringeva a subire entrambi o a
+        // rinunciare a entrambi.
+        for kind in AlertCenter.Kind.allCases {
+            let item = NSMenuItem(title: kind.settingsLabel,
+                                  action: #selector(toggleAlert(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = kind.rawValue
+            alertsMenu.addItem(item)
+            alertItems.append(item)
+        }
         alertsMenu.addItem(.separator())
-        for threshold in TemperatureAlert.thresholds {
+        let thresholdHeader = NSMenuItem(title: L("Temperature threshold"),
+                                         action: nil, keyEquivalent: "")
+        thresholdHeader.isEnabled = false
+        alertsMenu.addItem(thresholdHeader)
+        for threshold in AlertCenter.thresholds {
             let item = NSMenuItem(title: L("above %.0f °C", threshold),
                                   action: #selector(selectThreshold(_:)),
                                   keyEquivalent: "")
@@ -362,6 +390,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         displayRoot.submenu = displayMenu
         settingsMenu.addItem(displayRoot)
+
+        // Compare solo dove il modello esiste: su un Mac che non lo ha, una
+        // preferenza per una funzione assente e' solo una domanda senza
+        // risposta.
+        if Explainer.unavailable == nil {
+            explanationsItem = NSMenuItem(
+                title: L("Explain diagnoses in plain language"),
+                action: #selector(toggleExplanations), keyEquivalent: "")
+            explanationsItem.target = self
+            explanationsItem.toolTip = L("Uses the Apple Intelligence model on "
+                                       + "this Mac. Nothing leaves the device, "
+                                       + "and the measurements stay exactly as "
+                                       + "they were read.")
+            settingsMenu.addItem(explanationsItem)
+        }
 
         settingsMenu.addItem(.separator())
         launchItem = NSMenuItem(title: L("Open at login"),
@@ -479,11 +522,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         suspendItem.state = suspended.isEmpty ? .off : .on
         chartView.history = controller.history
         chartView.warningCelsius = Preferences.alertThreshold
-        alertsToggle.state = Preferences.alertsEnabled ? .on : .off
+        explanationsItem.state = Preferences.explanationsEnabled ? .on : .off
+        for item in alertItems {
+            guard let raw = item.representedObject as? String,
+                  let kind = AlertCenter.Kind(rawValue: raw) else { continue }
+            item.state = Preferences.alertEnabled(kind) ? .on : .off
+        }
+        // Le soglie servono solo all'allarme temperatura: spente quando
+        // quello e' spento, altrimenti sembrano governare qualcosa.
         for item in thresholdItems {
             item.state = (item.representedObject as? Double
                           == Preferences.alertThreshold) ? .on : .off
-            item.isEnabled = Preferences.alertsEnabled
+            item.isEnabled = Preferences.alertEnabled(.temperature)
         }
         for item in barDisplayItems {
             item.state = (item.representedObject as? String
@@ -1087,8 +1137,64 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         controller.restoreThrottled()
     }
 
-    @objc private func toggleAlerts() {
-        Preferences.alertsEnabled.toggle()
+    /// Mostra la diagnosi riscritta in parole semplici.
+    ///
+    /// Il testo generato non sostituisce mai le misure: la finestra porta in
+    /// alto i numeri letti dai sensori, parola per parola come sono stati
+    /// misurati, e sotto la riformulazione. Se il modello sbanda, il confronto
+    /// e' li' nella stessa finestra invece che da nessuna parte.
+    @objc private func explainDiagnosis() {
+        guard let finding = controller.findings.first(where: { $0.severity > .ok })
+        else { return }
+
+        // Il testo generato sta in una vista accessoria, non in
+        // `informativeText`: quello viene disegnato una volta sola quando la
+        // finestra si apre, e riscriverlo mentre la finestra e' gia' a schermo
+        // non ridisegna niente. Un campo di testo si aggiorna come qualunque
+        // altra vista, e il modello ci mette qualche secondo.
+        let body = NSTextField(wrappingLabelWithString: L("Writing the explanation…"))
+        body.frame = NSRect(x: 0, y: 0, width: 380, height: 96)
+        body.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        body.textColor = .secondaryLabelColor
+
+        let alert = NSAlert()
+        alert.messageText = finding.title
+        alert.informativeText = finding.measured
+        alert.accessoryView = body
+        alert.addButton(withTitle: L("OK"))
+
+        Task { @MainActor in
+            do {
+                let explanation = try await Explainer.explain(finding)
+                body.stringValue = """
+                \(explanation.whatIsHappening)
+                \(explanation.whatToDo)
+
+                \(L("Written just now by the Apple Intelligence model on this Mac, from the measurement above. Nothing left the device."))
+                """
+                body.textColor = .labelColor
+            } catch {
+                body.stringValue = L("The explanation could not be written: %@",
+                                     error.localizedDescription)
+            }
+        }
+        alert.runModal()
+    }
+
+    @objc private func toggleExplanations() {
+        Preferences.explanationsEnabled.toggle()
+        render()
+    }
+
+    @objc private func toggleAlert(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let kind = AlertCenter.Kind(rawValue: raw) else { return }
+        let now = !Preferences.alertEnabled(kind)
+        Preferences.setAlertEnabled(kind, now)
+        // Accendere un allarme a permesso mai concesso non produce niente e
+        // non lo dice: l'utente resta convinto di essere avvisato. Il momento
+        // in cui lo accende e' l'unico in cui la richiesta ha un senso.
+        if now { controller.requestAlertAuthorization() }
         render()
     }
 

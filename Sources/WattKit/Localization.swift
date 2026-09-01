@@ -22,3 +22,19 @@ public extension String {
     /// Comodità per le stringhe letterali: `"Low Power".localized`.
     var localized: String { L(self) }
 }
+
+/// Lingua in cui deve rispondere il modello di Apple Intelligence.
+///
+/// Il nome della lingua va scritto in inglese perché è la lingua in cui sono
+/// scritte le istruzioni, e un modello piccolo segue meglio un'istruzione che
+/// non cambia lingua a metà. Si ricava da quella scelta per l'interfaccia, non
+/// dalla lingua di sistema: chi legge Watt in italiano vuole la spiegazione in
+/// italiano, quale che sia la lingua del Mac.
+public enum Localization {
+    public static var modelLanguageName: String {
+        let code = Bundle.main.preferredLocalizations.first ?? "en"
+        return Locale(identifier: "en")
+            .localizedString(forLanguageCode: String(code.prefix(2)))
+            ?? "English"
+    }
+}

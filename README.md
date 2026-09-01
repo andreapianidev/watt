@@ -99,7 +99,7 @@ worth 0.1%. It is the diagnosis:
 $ Watt --diagnose
 
 !! NOT ENOUGH RAM: THE SYSTEM IS WRITING TO DISK
-      5.69 GB of swap in use, 1.90 GB compressed
+      12 MB/s to swap now, 5.69 GB in use, 1.90 GB compressed
       → Close what you do not need right now — the largest are
         Unity (1.1 GB), WebKit (0.6 GB). "Free memory" will not help
         here: purge discards the file cache, it does not bring back
@@ -115,6 +115,68 @@ not the one you assume, which is exactly why a selector alone is not enough.
 
 Every verdict carries the basis it rests on. Advice without a number behind it
 is an opinion, and there are enough opinions about performance already.
+
+### In plain language, without leaving the Mac
+
+A verdict like the one above is precise and, for some people, unreadable. Watt
+can rewrite it using the Apple Intelligence model that runs on the device:
+
+```console
+$ Watt --explain
+
+!! NOT ENOUGH RAM: THE SYSTEM IS WRITING TO DISK
+      12 MB/s to swap now, 3.40 GB in use, 5.10 GB compressed
+      ...
+
+in plain language:
+      The system is writing to disk instead of using memory.
+      Close what you do not need right now, the largest are Xcode and Chrome.
+```
+
+Also in the menu, under the diagnosis, as "Explain this in plain language".
+
+**The model does not diagnose.** The cause, the measurement and the remedy are
+decided by the code from sensor readings, and the model only rewrites them.
+That line is worth holding, because the opposite was tried: given the raw
+numbers and asked what was wrong, the on device model invented a cause that did
+not exist ("the package pressure of 3.5 watts") and proposed a remedy that means
+nothing. Constrained to rephrasing, it stays honest.
+
+The generation is guided rather than free for the same reason. Asked for free
+text on the same facts, it added a condition nobody gave it ("if there is no
+fresh air"). Two short fields to fill leave no room for that.
+
+What this means in practice:
+
+| | |
+|---|---|
+| Where it runs | On the Mac. No network, no account, no API key. |
+| What it sends | Nothing. |
+| What you always see | The measured numbers, verbatim, above the rewritten text. |
+| If Apple Intelligence is off | The menu item is not shown. Nothing else changes. |
+| On macOS 14 and 15 | The framework is weak linked. The app launches normally and the feature reports itself absent. |
+
+Measured on an M2 Air: 2.3 to 3.8 seconds per explanation.
+
+---
+
+### Alerts you choose
+
+Three alerts, each with its own switch under Settings, because the one that
+matters depends on what you do:
+
+| Alert | Fires when | On by default |
+|---|---|---|
+| When it gets hot | The die passes your threshold, 80 to 95 °C | yes |
+| When performance starts being limited | The moment the Mac stops running at full speed, with how much it lost | yes |
+| When the system starts swapping | Pages actually start going to disk | no |
+
+Swapping is off by default because someone who does not compile never meets
+it, and an alert that does not concern the person receiving it teaches them to
+ignore the other two.
+
+Each alert has its own quiet period of ten minutes and its own hysteresis:
+staying limited for twenty minutes is one piece of news, not twenty.
 
 ---
 
@@ -407,6 +469,8 @@ The app **is** the CLI, built for build scripts:
 
 ```bash
 Watt --status                  # frequency, temperatures, state
+Watt --diagnose                # what is limiting the machine right now
+Watt --explain                 # the same, rewritten in plain language
 Watt --temps                   # every sensor, hottest first
 Watt --battery                 # health, cycles, charger, wall power
 Watt --apply maximum           # apply a profile

@@ -18,7 +18,13 @@ final class PowerController {
     /// Sensori termici HID. Come IOReport non richiedono privilegi, quindi
     /// restano nell'app e funzionano anche senza helper installato.
     private let sensors = ThermalSensors()
-    private let alert = TemperatureAlert()
+    private let alert = AlertCenter()
+
+    /// Chiede il permesso di notifica adesso, perche' l'utente ha appena
+    /// acceso un allarme.
+    func requestAlertAuthorization() {
+        alert.requestAuthorizationNow()
+    }
 
     /// Pressione termica dalla stessa chiave notify(3) che legge
     /// `powermetrics`. Costa una lettura di memoria condivisa, quindi la
@@ -262,7 +268,9 @@ final class PowerController {
             // di ProcessInfo: era l'unico punto rimasto in cui l'app
             // decideva su un dato che sapeva essere sbagliato di un livello.
             alert.evaluate(socCelsius: maximum,
-                           throttling: sample.thermalPressure.isThrottling)
+                           throttling: sample.thermalPressure.isThrottling,
+                           ceilingFraction: sample.pCoreCeilingFraction,
+                           memory: memory)
         }
 
         refreshBattery()

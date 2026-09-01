@@ -230,3 +230,33 @@
 "5 seconds" = "5 secondi";
 "10 seconds" = "10 secondi";
 "Measured on an M2 Air with the menu closed: taking the readings costs about 0.4%% of a core. Redrawing the menu bar every time the number changes costs three times as much. Slowing the refresh helps less than choosing a value that changes rarely." = "Misurato su M2 Air a menu chiuso: prendere le letture costa circa lo 0,4%% di un core. Ridisegnare la barra dei menu ogni volta che il numero cambia costa il triplo. Rallentare l'aggiornamento aiuta meno che scegliere un valore che cambia di rado.";
+
+/* Allarmi impostabili */
+"Alerts" = "Avvisi";
+"When it gets hot" = "Quando scalda";
+"When performance starts being limited" = "Quando le prestazioni iniziano a essere limitate";
+"When the system starts swapping" = "Quando il sistema inizia a scrivere su disco";
+"Temperature threshold" = "Soglia di temperatura";
+"The Mac is being limited" = "Il Mac sta venendo limitato";
+"P-cores are running at%@ of what they could. No power profile lifts this: it is heat, and it passes on its own when the load drops." = "I P-core stanno andando al%@ di quello che potrebbero. Nessun profilo energetico lo cambia: è calore, e passa da sé quando cala il carico.";
+"The system has started limiting performance." = "Il sistema ha iniziato a limitare le prestazioni.";
+"The system is writing memory to disk" = "Il sistema sta scrivendo memoria su disco";
+"%@ going to swap. Reading a page back costs orders of magnitude more than from RAM, and no power profile changes that. Close what you are not using." = "%@ stanno andando su swap. Rileggere una pagina da lì costa ordini di grandezza più che dalla RAM, e nessun profilo energetico lo cambia. Chiudi quello che non stai usando.";
+"RAM has run out and the system is falling back to disk." = "La RAM è finita e il sistema sta ripiegando sul disco.";
+
+/* Spiegazioni con Apple Intelligence */
+"Explain this in plain language" = "Spiegamelo in parole semplici";
+"Explain diagnoses in plain language" = "Spiega le diagnosi in parole semplici";
+"Uses the Apple Intelligence model on this Mac. Nothing leaves the device, and the measurements stay exactly as they were read." = "Usa il modello di Apple Intelligence su questo Mac. Non esce niente dal dispositivo, e le misure restano esattamente come sono state lette.";
+"Writing the explanation…" = "Sto scrivendo la spiegazione…";
+"Written just now by the Apple Intelligence model on this Mac, from the measurement above. Nothing left the device." = "Scritto adesso dal modello di Apple Intelligence su questo Mac, a partire dalla misura qui sopra. Non è uscito niente dal dispositivo.";
+"The explanation could not be written: %@" = "La spiegazione non si è potuta scrivere: %@";
+"Plain-language explanations need a newer macOS." = "Le spiegazioni in parole semplici richiedono un macOS più recente.";
+"Apple Intelligence is not available on this Mac: %@" = "Apple Intelligence non è disponibile su questo Mac: %@";
+"This Mac cannot run the on-device model." = "Questo Mac non può eseguire il modello sul dispositivo.";
+"this hardware does not support it" = "questo hardware non lo supporta";
+"Apple Intelligence is switched off in System Settings" = "Apple Intelligence è spenta in Impostazioni di Sistema";
+"the model is still downloading" = "il modello si sta ancora scaricando";
+"unknown reason" = "motivo sconosciuto";
+"Nothing to explain: nothing is limiting this Mac." = "Niente da spiegare: non c'è niente che stia limitando questo Mac.";
+"in plain language:" = "in parole semplici:";

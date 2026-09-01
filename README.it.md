@@ -65,7 +65,7 @@ diagnosi:
 $ Watt --diagnose
 
 !! LA RAM NON BASTA: IL SISTEMA STA SCRIVENDO SU DISCO
-      5,69 GB di swap in uso, 1,90 GB compressi
+      12 MB/s su swap adesso, 5,69 GB in uso, 1,90 GB compressi
       → Chiudi ciò che non ti serve adesso — i più ingombranti sono
         Unity (1,1 GB), WebKit (0,6 GB). «Libera memoria» non aiuta in
         questo caso: purge scarta la cache dei file, non riporta in RAM
@@ -83,6 +83,71 @@ selettore da solo non basta.
 Ogni verdetto porta con sé la base su cui poggia. Un consiglio senza un numero
 dietro è un'opinione, e di opinioni sulle prestazioni ce ne sono già
 abbastanza.
+
+---
+
+### In parole semplici, senza uscire dal Mac
+
+Un verdetto come quello qui sopra è preciso e, per qualcuno, illeggibile. Watt
+lo può riscrivere con il modello di Apple Intelligence che gira sul dispositivo:
+
+```console
+$ Watt --explain
+
+!! LA RAM NON BASTA: IL SISTEMA STA SCRIVENDO SU DISCO
+      12 MB/s su swap adesso, 3.40 GB in uso, 5.10 GB compressi
+      ...
+
+in parole semplici:
+      Il sistema sta scrivendo sul disco invece di usare la memoria.
+      Chiudi ciò che non hai bisogno adesso, i più grandi sono Xcode e Chrome.
+```
+
+Anche nel menu, sotto la diagnosi, come «Spiegamelo in parole semplici».
+
+**Il modello non diagnostica.** La causa, la misura e il rimedio li decide il
+codice leggendo i sensori, e il modello si limita a riscriverli. È una riga che
+vale la pena tenere ferma, perché il contrario è stato provato: dati i numeri
+grezzi e chiesto cosa non andasse, il modello sul dispositivo si è inventato
+una causa che non esisteva («la pressione sul pacchetto di 3,5 watt») e ha
+proposto un rimedio che non vuol dire niente. Vincolato a riformulare, non
+sbanda.
+
+La generazione è guidata e non libera per la stessa ragione. A testo libero,
+sugli stessi fatti, aggiungeva una condizione che nessuno gli aveva dato («se
+non c'è aria fresca»). Due campi corti da riempire non gliene lasciano lo
+spazio.
+
+In pratica:
+
+| | |
+|---|---|
+| Dove gira | Sul Mac. Niente rete, niente account, niente chiave API. |
+| Cosa manda fuori | Niente. |
+| Cosa vedi sempre | I numeri misurati, parola per parola, sopra il testo riscritto. |
+| Se Apple Intelligence è spenta | La voce non compare. Nient'altro cambia. |
+| Su macOS 14 e 15 | Il framework è collegato in modo debole. L'app parte normalmente e la funzione si dichiara assente. |
+
+Misurato su un M2 Air: da 2,3 a 3,8 secondi per spiegazione.
+
+---
+
+### Gli avvisi li scegli tu
+
+Tre avvisi, ognuno con il suo interruttore in Impostazioni, perché quale conti
+dipende da cosa fai:
+
+| Avviso | Scatta quando | Acceso di suo |
+|---|---|---|
+| Quando scalda | Il die supera la soglia scelta, da 80 a 95 °C | sì |
+| Quando le prestazioni iniziano a essere limitate | Nel momento in cui il Mac smette di andare al massimo, con quanto ha perso | sì |
+| Quando il sistema inizia a scrivere su disco | Le pagine cominciano davvero ad andare su disco | no |
+
+Lo swap è spento di suo perché chi non compila non lo incontra mai, e un
+avviso che non riguarda chi lo riceve insegna a ignorare gli altri due.
+
+Ogni avviso ha la sua pausa di dieci minuti e la sua isteresi: restare limitati
+per venti minuti è una notizia sola, non venti.
 
 ---
 
@@ -384,6 +449,8 @@ L'app **è** anche la CLI, pensata per gli script di build:
 
 ```bash
 Watt --status                  # frequenze, temperature, stato
+Watt --diagnose                # cosa sta limitando la macchina adesso
+Watt --explain                 # come sopra, in parole semplici
 Watt --temps                   # tutti i sensori, dal più caldo
 Watt --battery                 # salute, cicli, alimentatore, presa
 Watt --apply massimo           # applica un profilo

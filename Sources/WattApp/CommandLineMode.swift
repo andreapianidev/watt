@@ -163,6 +163,10 @@ enum CommandLineMode {
             diagnose()
             return true
 
+        case "--explain":
+            diagnose(explaining: true)
+            return true
+
         case "--temps":
             guard let summary = ThermalSensors()?.read(), !summary.all.isEmpty else {
                 fail(L("Thermal sensors are not readable on this system."))
@@ -224,6 +228,8 @@ enum CommandLineMode {
           Watt --status            stato del sistema e consumi correnti
           Watt --profiles          elenca i profili e cosa fanno
           Watt --diagnose          cosa sta limitando la macchina adesso
+          Watt --explain           come sopra, riscritto in parole semplici
+                                   dal modello di Apple Intelligence
           Watt --temps             tutte le temperature dei sensori
           Watt --battery           salute, cicli e degrado della batteria
           Watt --verify-freq [n]   confronta IOReport con powermetrics
@@ -472,7 +478,7 @@ enum CommandLineMode {
     }
 
     /// Analizza e stampa cosa sta limitando la macchina.
-    private static func diagnose() {
+    private static func diagnose(explaining: Bool = false) {
         let sampler = IOReportSampler()
         Thread.sleep(forTimeInterval: 0.3)
         var sample = PowerSample()
@@ -520,6 +526,42 @@ enum CommandLineMode {
             print("nota: senza helper non si vedono i processi di altri utenti,")
             print("      quindi la contesa e WindowServer restano invisibili.")
         }
+        if explaining { explain(findings) }
+    }
+
+    /// Riscrive il primo verdetto con il modello di Apple Intelligence.
+    ///
+    /// Lo stesso percorso della voce di menu, ma verificabile da terminale e
+    /// utilizzabile da uno script. Il verdetto misurato resta stampato sopra:
+    /// la riformulazione si aggiunge, non sostituisce.
+    private static func explain(_ findings: [Diagnosis.Finding]) {
+        guard let finding = findings.first(where: { $0.severity > .ok }) else {
+            print(L("Nothing to explain: nothing is limiting this Mac."))
+            return
+        }
+        if let unavailable = MainActor.assumeIsolated({ Explainer.unavailable }) {
+            fail(MainActor.assumeIsolated { unavailable.message })
+        }
+
+        // Da riga di comando non c'e' un ciclo di run da tenere vivo: si
+        // aspetta il risultato e basta.
+        let semaphore = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var output: String?
+        Task { @MainActor in
+            defer { semaphore.signal() }
+            do {
+                let explanation = try await Explainer.explain(finding)
+                output = explanation.whatIsHappening + "\n" + explanation.whatToDo
+            } catch {
+                output = L("The explanation could not be written: %@",
+                           error.localizedDescription)
+            }
+        }
+        semaphore.wait()
+        print(L("in plain language:"))
+        print("      " + wrap(output ?? "").replacingOccurrences(
+            of: "\n            ", with: "\n      "))
+        print("")
     }
 
     /// Manda a capo a 68 colonne allineando le righe successive.
