@@ -542,6 +542,30 @@ in parentheses is the developer's personal ID and differs from the team. Using
 it produces a requirement no signature can ever satisfy, and the helper would
 reject its own app without saying why.
 
+### Tests
+
+```bash
+swift test
+```
+
+Ten tests, and none of them was written for coverage. Each one reproduces a
+defect that had already reached a user:
+
+| Test | The defect it holds down |
+|---|---|
+| Occupied but idle swap is not swapping | The "not enough RAM" warning stayed on permanently, because it read how much swap was occupied instead of whether pages were moving. Measured on the machine that day: 1424 MB occupied, memory pressure green, zero pages written in five seconds, warning on. |
+| Swap in motion is swapping | A fix that only silences the warning is not a fix. |
+| Estimated pressure is not measured pressure | The field the stale helper failed to fill, and the reason a verdict could rest on a guess. |
+| A low clock at idle is not throttling | P-cores sit near 900 MHz with no work to do. Confusing the two is what makes half the thermal monitors out there useless. |
+| The model rephrases without inventing | Asserts the generated text never mentions fans or airflow, which this Mac does not have and which the facts never contained. It was the drift that free-form generation actually produced. |
+
+The last one calls the on-device model for real and takes about two seconds. It
+skips itself, quietly, on a Mac where Apple Intelligence is not available.
+
+To be sure the tests are worth their run time, they were checked against the
+old broken implementation: three of them fail, including the exact one that had
+shipped.
+
 ### Releasing
 
 ```bash

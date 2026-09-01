@@ -524,6 +524,31 @@ parentesi è l'ID personale dello sviluppatore e differisce dal team. Usarlo
 produce un requisito che nessuna firma potrà soddisfare, e l'helper
 rifiuterebbe la propria stessa app senza dire perché.
 
+### Test
+
+```bash
+swift test
+```
+
+Dieci prove, e nessuna scritta per copertura. Ognuna riproduce un difetto che
+era gia' arrivato a un utente:
+
+| Prova | Il difetto che tiene fermo |
+|---|---|
+| Swap occupato ma fermo non e' swapping | L'avviso «la RAM non basta» restava acceso sempre, perche' guardava quanto swap risultava occupato invece che se le pagine si muovessero. Misurato sulla macchina quel giorno: 1424 MB occupati, pressione di memoria verde, zero pagine scritte in cinque secondi, avviso acceso. |
+| Swap in movimento e' swapping | Una correzione che spegne l'avviso e basta non e' una correzione. |
+| Pressione stimata non vale come misurata | Il campo che l'helper stantio non compilava, e il motivo per cui un verdetto poteva poggiare su una supposizione. |
+| Frequenza bassa a riposo non e' una limitazione | I P-core stanno vicino ai 900 MHz quando non c'e' lavoro. Confondere le due cose e' cio' che rende inutile meta' dei monitor termici in giro. |
+| Il modello riformula senza inventare | Verifica che il testo generato non nomini mai ventole o aria, che questo Mac non ha e che nei fatti non c'erano. Era lo sbandamento che la generazione libera produceva davvero. |
+
+L'ultima chiama il modello sul dispositivo per davvero e impiega circa due
+secondi. Si salta da sola, in silenzio, su un Mac dove Apple Intelligence non
+c'e'.
+
+Per essere certi che le prove valgano il tempo che costano, sono state
+verificate contro l'implementazione vecchia e difettosa: tre falliscono,
+compresa esattamente quella che era stata distribuita.
+
 ### Rilasciare
 
 ```bash

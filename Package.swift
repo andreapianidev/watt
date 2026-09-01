@@ -8,5 +8,6 @@ let package = Package(
         .target(name: "WattKit"),
         .executableTarget(name: "WattHelper", dependencies: ["WattKit"]),
         .executableTarget(name: "WattApp", dependencies: ["WattKit"]),
+        .testTarget(name: "WattTests", dependencies: ["WattApp", "WattKit"]),
     ]
 )
