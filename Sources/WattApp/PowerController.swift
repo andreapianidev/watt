@@ -20,6 +20,14 @@ final class PowerController {
     private let sensors = ThermalSensors()
     private let alert = TemperatureAlert()
 
+    /// Pressione termica dalla stessa chiave notify(3) che legge
+    /// `powermetrics`. Costa una lettura di memoria condivisa, quindi la
+    /// misura vera e' disponibile a ogni giro invece che solo a menu aperto.
+    private let pressureMonitor = ThermalPressureMonitor()
+
+    /// Batteria: registro IO, nessun privilegio, cambia lentamente.
+    private let battery = BatteryHistory()
+
     private(set) var history = TemperatureHistory()
     private(set) var throttleReport: ThrottleReport?
     private(set) var suspendedServices: [String] = []
@@ -38,6 +46,15 @@ final class PowerController {
     private(set) var temperatures: ThermalSensors.Summary?
     private(set) var lastState: SystemState?
     private(set) var lastError: String?
+    private(set) var batterySnapshot: BatterySnapshot?
+
+    /// Storico del degrado, letto dal disco all'avvio.
+    var batteryTrend: [BatteryHistory.Entry] { battery.entries }
+    var batteryDegradation: (points: Double, days: Double, cycles: Int)? {
+        battery.degradation
+    }
+    var batteryMonthsToEighty: Double? { battery.monthsToEightyPercent }
+    var batteryTrendIsMeaningful: Bool { battery.isTrendMeaningful }
 
     var onChange: (() -> Void)?
 
@@ -47,6 +64,14 @@ final class PowerController {
         self.keepAwake.keepDisplayOn = Preferences.keepDisplayOn
         self.keepAwake.onChange = { [weak self] in self?.notify() }
         self.alert.requestAuthorizationIfNeeded()
+
+        // Il kernel pubblica il cambio di livello nell'istante in cui
+        // avviene: a menu chiuso il timer puo' scattare ogni dieci secondi,
+        // e dieci secondi di icona sbagliata su un evento che ne dura
+        // sessanta sono un sesto della verita' persa per niente.
+        self.pressureMonitor.observe { [weak self] _ in
+            Task { @MainActor in self?.refreshPressureOnly() }
+        }
 
         // Un cambio di profilo fatto da riga di comando deve comparire subito
         // nel menu, non alla prossima interazione.
@@ -208,31 +233,95 @@ final class PowerController {
         // l'elenco integrale e' a schermo.
         temperatures = sensors?.readAdaptive()
 
-        if let summary = temperatures, !summary.all.isEmpty {
-            // La media è su tutti i sensori, la massima è il punto più caldo:
-            // insieme dicono se scalda tutto il SoC o un solo cluster.
-            let values = summary.all.map(\.celsius)
-            history.append(maximum: values.max() ?? 0,
-                           average: values.reduce(0, +) / Double(values.count))
-            alert.evaluate(
-                socCelsius: summary.socCelsius,
-                throttling: ThermalPressure(
-                    processInfoState: ProcessInfo.processInfo.thermalState)
-                    .isThrottling)
-        }
-
         var sample = lastSample ?? PowerSample()
         if let reading = ioReport?.sample() {
             sample.pCoreMHz = reading.pCoreMHz
             sample.eCoreMHz = reading.eCoreMHz
             sample.pCoreCeilingMHz = reading.pCoreCeilingMHz
             sample.eCoreCeilingMHz = reading.eCoreCeilingMHz
+            // Senza il riposo, "1,1 GHz su 3,5" si legge come una
+            // limitazione anche quando e' solo una macchina ferma.
+            sample.pCoreIdleRatio = reading.pCoreIdleFraction
         }
-        sample.thermalPressureRaw = ThermalPressure(
-            processInfoState: ProcessInfo.processInfo.thermalState).rawValue
+        resolvePressure(in: &sample)
         sample.sampledAt = Date()
         lastSample = sample
+
+        if let summary = temperatures, let maximum = summary.socCelsius {
+            // Entrambe le curve vengono dal *solo* die, e su tutti e sedici
+            // i sensori anche quando il giro ne ha riletti quattro.
+            //
+            // Prima la media era su `all`, cioe' su un insieme che cambia
+            // dimensione a ogni giro: quattro sensori caldi nei giri veloci,
+            // sedici piu' batteria e SSD in quelli completi. Il risultato era
+            // un dente di sega periodico nel grafico, che non corrispondeva
+            // a nulla di fisico e si leggeva come throttling a intermittenza.
+            history.append(maximum: maximum,
+                           average: summary.socAverageCelsius ?? maximum)
+            // L'allarme guarda la pressione **misurata**, non piu' la stima
+            // di ProcessInfo: era l'unico punto rimasto in cui l'app
+            // decideva su un dato che sapeva essere sbagliato di un livello.
+            alert.evaluate(socCelsius: maximum,
+                           throttling: sample.thermalPressure.isThrottling)
+        }
+
+        refreshBattery()
         notify()
+    }
+
+    /// Aggiorna solo la pressione termica, senza rileggere nient'altro.
+    ///
+    /// La chiama l'osservatore del kernel quando il livello cambia: rifare
+    /// l'intero giro di campionamento a ogni transizione costerebbe piu'
+    /// dell'informazione che porta.
+    private func refreshPressureOnly() {
+        var sample = lastSample ?? PowerSample()
+        resolvePressure(in: &sample)
+        lastSample = sample
+        notify()
+    }
+
+    /// Decide da quale fonte prendere la pressione termica.
+    ///
+    /// L'ordine e' per qualita' del dato, non per comodita':
+    ///
+    /// 1. il **kernel**, su `com.apple.system.thermalpressurelevel`. E' la
+    ///    stessa sorgente da cui legge `powermetrics` — nel binario di
+    ///    powermetrics c'e' la stringa "thermal pressure notifications" — ma
+    ///    e' sempre attuale e non costa niente. La verifica appaiata sta in
+    ///    `Watt --verify-pressure`;
+    /// 2. un campione **recente** di powermetrics, se il kernel non e'
+    ///    leggibile;
+    /// 3. `ProcessInfo`, che sbaglia di un livello intero e va usato solo
+    ///    quando non c'e' altro.
+    ///
+    /// Prima qui c'era il passo 3 da solo, e sovrascriveva il passo 2 anche
+    /// quando questo era appena arrivato: la misura veniva pagata con mezzo
+    /// secondo di powermetrics e poi buttata via.
+    private func resolvePressure(in sample: inout PowerSample) {
+        if let level = pressureMonitor.level {
+            sample.thermalPressureRaw = level.rawValue
+            sample.thermalPressureSource = .kernel
+            return
+        }
+        let fresh = sample.thermalPressureSource == .powermetrics
+            && Date().timeIntervalSince(sample.sampledAt) < 30
+        guard !fresh else { return }
+        sample.thermalPressureRaw = ThermalPressure(
+            processInfoState: ProcessInfo.processInfo.thermalState).rawValue
+        sample.thermalPressureSource = .processInfo
+    }
+
+    /// Rilegge la batteria e, se il caso, ne annota un punto nello storico.
+    ///
+    /// Costa una lettura del registro IO — meno di un millesimo di quanto
+    /// costano i sensori termici — ma le grandezze che conta davvero (cicli,
+    /// capacita' a piena carica) cambiano nell'arco di settimane: e' lo
+    /// storico ad avere una cadenza, non la lettura.
+    private func refreshBattery() {
+        guard let snapshot = BatteryReader.read() else { return }
+        batterySnapshot = snapshot
+        battery.record(snapshot, temperature: temperatures?.batteryCelsius)
     }
 
     /// Chiede all'helper un campione di `powermetrics` per i soli watt.
@@ -245,6 +334,24 @@ final class PowerController {
             merged.packageMilliwatts = sample.packageMilliwatts
             merged.cpuMilliwatts = sample.cpuMilliwatts
             merged.gpuMilliwatts = sample.gpuMilliwatts
+            // La pressione termica arriva nello stesso campione dei watt e
+            // costa quanto loro: scartarla e tenere solo le potenze
+            // significava rifare la misura precisa e non usarla mai.
+            // Non si controlla il flag ma la presenza del valore:
+            // l'helper legge la pressione solo da powermetrics, quindi un
+            // campo pieno *e'* una misura. Cosi' la correzione vale anche
+            // con l'helper gia' installato, che il flag non lo manda.
+            //
+            // Il kernel resta comunque la fonte migliore: e' la stessa, ma
+            // attuale invece che vecchia di mezzo secondo. Questo ramo serve
+            // ai Mac o alle versioni di macOS dove la chiave notify non
+            // risponde.
+            if self.pressureMonitor.level == nil,
+               let pressure = sample.thermalPressureRaw {
+                merged.thermalPressureRaw = pressure
+                merged.thermalPressureSource = .powermetrics
+            }
+            merged.sampledAt = Date()
             self.lastSample = merged
             self.notify()
         }

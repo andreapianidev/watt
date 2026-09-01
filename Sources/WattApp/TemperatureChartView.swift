@@ -124,21 +124,21 @@ final class TemperatureChartView: NSView {
 
     private func drawScale(low: Double, high: Double, in plot: NSRect) {
         attributed(String(format: "%.0f°", high), size: 9,
-                   color: .tertiaryLabelColor)
+                   color: .secondaryLabelColor)
             .draw(at: NSPoint(x: 2, y: plot.maxY - 6))
         attributed(String(format: "%.0f°", low), size: 9,
-                   color: .tertiaryLabelColor)
+                   color: .secondaryLabelColor)
             .draw(at: NSPoint(x: 2, y: plot.minY - 4))
 
         let minutes = history.span / 60
         attributed(L("last %.0f min", max(minutes, 1)),
-                   size: 9, color: .tertiaryLabelColor)
+                   size: 9, color: .secondaryLabelColor)
             .draw(at: NSPoint(x: plot.minX, y: 3))
     }
 
     private func drawPlaceholder(in plot: NSRect) {
         let text = attributed(L("Collecting data…"), size: 11,
-                              color: .tertiaryLabelColor)
+                              color: .secondaryLabelColor)
         text.draw(at: NSPoint(x: plot.midX - text.size().width / 2,
                               y: plot.midY - 6))
     }

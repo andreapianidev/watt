@@ -59,6 +59,8 @@ enum PowerMetricsSampler {
 
         var sample = PowerSample()
         sample.thermalPressureRaw = root["thermal_pressure"] as? String
+        sample.thermalPressureSource =
+            sample.thermalPressureRaw == nil ? .unknown : .powermetrics
 
         guard let processor = root["processor"] as? [String: Any] else {
             return sample.thermalPressureRaw == nil ? nil : sample
@@ -131,6 +133,8 @@ enum PowerMetricsSampler {
                 sample.thermalPressureRaw = line
                     .split(separator: ":").last?
                     .trimmingCharacters(in: .whitespaces)
+                sample.thermalPressureSource =
+                    sample.thermalPressureRaw == nil ? .unknown : .powermetrics
             }
         }
         if sample.packageMilliwatts == nil {

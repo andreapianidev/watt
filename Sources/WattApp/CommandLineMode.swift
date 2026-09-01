@@ -87,8 +87,10 @@ enum CommandLineMode {
             else { fail(L("Helper unreachable.")) }
             print(report.summary)
             for entry in report.throttled.prefix(20) {
-                print(String(format: "   %-24@ %5.1f%%  %6.0f MB",
-                             entry.name as NSString, entry.cpuPercent, entry.memoryMB))
+                print("   " + entry.name.padding(toLength: 24, withPad: " ",
+                                                 startingAt: 0)
+                    + String(format: " %5.1f%%  %6.0f MB",
+                             entry.cpuPercent, entry.memoryMB))
             }
             return true
 
@@ -108,6 +110,46 @@ enum CommandLineMode {
                 + "  tetto \(r.pCoreCeilingMHz.map { String(format: "%.0f", $0) } ?? "?")")
             print("E-core  \(r.eCoreMHz.map { String(format: "%.0f MHz", $0) } ?? "n/d")")
             sampler.dumpLastComputation()
+            return true
+
+        case "--verify-freq":
+            // Confronto appaiato con powermetrics, sulla stessa finestra.
+            //
+            // Serve a rispondere alla sola domanda che conta: il numero in
+            // barra dei menu e' quello vero? powermetrics vuole root, quindi
+            // il campione arriva dall'helper; la finestra di IOReport viene
+            // aperta subito prima della chiamata e chiusa subito dopo, cosi'
+            // le due misure guardano lo stesso intervallo.
+            verifyFrequency(rounds: Int(arguments.dropFirst().first ?? "") ?? 5)
+            return true
+
+        case "--watch-temps":
+            // Ripete la lettura adattiva alla cadenza dell'app e stampa,
+            // per ogni giro, *quanti* sensori sono finiti nel campione.
+            // Il numero di sensori e' la variabile che il grafico non
+            // mostra e che pero' ne determina la media.
+            watchTemperatures(seconds: Int(arguments.dropFirst().first ?? "") ?? 30)
+            return true
+
+        case "--battery":
+            printBattery()
+            return true
+
+        case "--verify-pressure":
+            // La verifica che rende lecito smettere di usare powermetrics
+            // per la pressione termica.
+            verifyPressure(rounds: Int(arguments.dropFirst().first ?? "") ?? 10)
+            return true
+
+        case "--load":
+            // Generatore di carico a QoS elevata. Serve a misurare, non a
+            // scaldare per il gusto di farlo: la prova precedente usava dei
+            // cicli di shell, che il sistema classifica come background e
+            // confina sugli E-core — il cluster P restava a 1188 MHz e
+            // l'esperimento non misurava niente.
+            let arguments = Array(arguments.dropFirst())
+            generateLoad(threads: Int(arguments.first ?? "") ?? 0,
+                         seconds: Double(arguments.dropFirst().first ?? "") ?? 60)
             return true
 
         case "--bench":
@@ -133,8 +175,9 @@ enum CommandLineMode {
                          ThermalSensors.Summary.format(summary.storageCelsius)))
             print(L("\n%d sensors:", summary.all.count))
             for reading in summary.all {
-                print(String(format: "   %-24@ %6.1f °C",
-                             reading.name as NSString, reading.celsius))
+                print("   " + reading.name.padding(toLength: 24, withPad: " ",
+                                                   startingAt: 0)
+                    + String(format: " %6.1f °C", reading.celsius))
             }
             return true
 
@@ -182,6 +225,13 @@ enum CommandLineMode {
           Watt --profiles          elenca i profili e cosa fanno
           Watt --diagnose          cosa sta limitando la macchina adesso
           Watt --temps             tutte le temperature dei sensori
+          Watt --battery           salute, cicli e degrado della batteria
+          Watt --verify-freq [n]   confronta IOReport con powermetrics
+          Watt --verify-pressure [n]
+                                   confronta la pressione termica letta dal
+                                   kernel con quella di powermetrics
+          Watt --load [n] [sec]    carico a QoS alta su n thread, per misurare
+          Watt --bench             quanto costa un giro di campionamento
           Watt --suspend           congela i servizi differibili (SIGSTOP)
           Watt --resume            li riattiva
           Watt --throttle          rallenta i background che consumano
@@ -276,8 +326,37 @@ enum CommandLineMode {
         if let mhz = reading?.eCoreMHz {
             print(String(format: L("E-cores         : %.2f GHz"), mhz / 1000))
         }
-        print(L("thermal        : %@", pressure.label)
-            + (pressure.demandsAttention ? L("  <- performance limited") : ""))
+        // Due fonti, e vanno mostrate entrambe quando divergono: la stima di
+        // ProcessInfo e la misura di powermetrics. E' la stessa misura che
+        // asitop riduce a "throttle: yes/no", e nasconderla dietro la stima
+        // era il motivo per cui Watt taceva mentre asitop segnalava.
+        // Tre fonti, e vanno mostrate tutte quando divergono. Il kernel e'
+        // quella buona: `com.apple.system.thermalpressurelevel` e' la stessa
+        // chiave notify(3) da cui legge powermetrics, ma non costa un
+        // processo e non vuole root. `--verify-pressure` le confronta.
+        let kernel = ThermalPressureMonitor().level
+        if let kernel {
+            print(L("thermal        : %@", kernel.label)
+                + " (kernel: \(kernel.rawValue))"
+                + (kernel.isThrottling ? L("  <- performance limited") : ""))
+        }
+        if let sample, let raw = sample.thermalPressureRaw {
+            let measured = ThermalPressure(raw: raw)
+            if kernel == nil {
+                print(L("thermal        : %@", measured.label)
+                    + " (powermetrics: \(raw))"
+                    + (measured.isThrottling ? L("  <- performance limited") : ""))
+            } else if measured != kernel {
+                print("  powermetrics dice invece: \(measured.label)")
+            }
+        }
+        if kernel == nil, sample?.thermalPressureRaw == nil {
+            print(L("thermal        : %@", pressure.label)
+                + (pressure.demandsAttention ? L("  <- performance limited") : "")
+                + "  (stima, kernel e helper assenti)")
+        } else if pressure != (kernel ?? ThermalPressure(raw: sample?.thermalPressureRaw)) {
+            print(L("  ProcessInfo instead says: %@", pressure.label))
+        }
         if let temps = ThermalSensors()?.read() {
             print(L("SoC temperature: %@", ThermalSensors.Summary.format(temps.socCelsius)))
             print(L("battery / SSD  : %@ / %@",
@@ -287,6 +366,16 @@ enum CommandLineMode {
         if let watts = sample?.packageWattsText {
             print(L("package        : %@", watts))
         }
+        if let battery = BatteryReader.read(), let health = battery.healthPercent {
+            print(String(format: L("battery        : %d%%, health %.1f%%, %d cycles"),
+                         battery.chargePercent ?? 0, health,
+                         battery.cycleCount ?? 0))
+            if let system = battery.systemWatts {
+                // Il consumo del Mac intero, schermo compreso: e' un'altra
+                // grandezza rispetto ai watt del package, e va detto.
+                print(String(format: L("system (wall)  : %.1f W"), system))
+            }
+        }
         if let state {
             print(L("low power mode : %@", state.lowPowerMode ? L("on") : L("off")))
             print(L("power nap      : %@", state.powerNap ? L("on") : L("off")))
@@ -294,6 +383,91 @@ enum CommandLineMode {
             print(L("time machine   : %@", state.timeMachineAutomatic ? L("automatic") : L("paused")))
             print(L("app nap        : %@", AppNapControl.isDisabled ? L("disabled") : L("on")))
             print(L("helper         : %@", state.helperVersion))
+        }
+    }
+
+    /// Tutto quello che il Mac sa della propria batteria, in stile
+    /// coconutBattery.
+    private static func printBattery() {
+        guard let battery = BatteryReader.read() else {
+            fail("Nessuna batteria leggibile su questa macchina.")
+        }
+
+        func line(_ label: String, _ value: String?) {
+            guard let value, !value.isEmpty else { return }
+            print("   " + label.padding(toLength: max(label.count, 26),
+                                        withPad: " ", startingAt: 0) + value)
+        }
+
+        print("batteria\n")
+        line("carica", battery.chargePercent.map { "\($0) %" })
+        line("stato", battery.stateLabel)
+        line("autonomia", battery.timeRemainingText)
+
+        print("")
+        if let health = battery.healthPercent, let full = battery.fullChargeCapacityMAh,
+           let design = battery.designCapacityMAh {
+            line("salute", String(format: "%.1f %%   (%d / %d mAh)",
+                                  health, full, design))
+        }
+        // I due numeri divergono per costruzione, non per errore: Apple
+        // parte dalla capacita' nominale invece che da quella grezza e
+        // tronca invece di arrotondare. Stamparli vicini e' l'unico modo
+        // per non far sembrare che uno dei due mentisca.
+        if let apple = battery.applePercent,
+           let nominal = battery.nominalChargeCapacityMAh {
+            line("capacita' massima (macOS)",
+                 String(format: "%d %%     (%d mAh nominali)", apple, nominal))
+        }
+        line("cicli", battery.cycleCount.map { cycles in
+            battery.designCycleCount.map { "\(cycles) / \($0)" } ?? "\(cycles)"
+        })
+        line("condizione", battery.condition)
+        if let now = battery.remainingWattHours, let full = battery.fullChargeWattHours,
+           let design = battery.designWattHours {
+            line("energia (approssimata)",
+                 String(format: "%.1f / %.1f / %.1f Wh   (ora / piena / progetto)",
+                        now, full, design))
+        }
+        line("tensione nominale pacco", battery.nominalPackVolts.map {
+            String(format: "%.2f V  (%d celle in serie, derivata)",
+                   $0, battery.seriesCells ?? 0) })
+
+        print("")
+        line("tensione", battery.voltageMV.map {
+            String(format: "%.3f V", Double($0) / 1000) })
+        line("corrente", (battery.amperageMA ?? battery.instantAmperageMA)
+            .map { "\($0) mA" })
+        line("potenza batteria", battery.batteryWatts.map {
+            String(format: "%+.2f W", $0) })
+        line("temperatura", ThermalSensors()?.read().batteryCelsius.map {
+            String(format: "%.1f °C", $0) })
+
+        print("")
+        line("sistema dalla presa", battery.systemWatts.map {
+            String(format: "%.2f W", $0) })
+        line("perdita alimentatore", battery.adapterEfficiencyLossMW.map {
+            String(format: "%.2f W", Double($0) / 1000) })
+        line("alimentatore", battery.adapterName)
+        line("potenza negoziata", battery.adapterWatts.map { "\($0) W" })
+        line("uscita alimentatore", battery.adapterVoltageMV.map {
+            String(format: "%.1f V × %.2f A", Double($0) / 1000,
+                   Double(battery.adapterCurrentMA ?? 0) / 1000) })
+        line("costruttore", battery.adapterManufacturer)
+        line("seriale alimentatore", battery.adapterSerial)
+
+        print("")
+        line("pacco", battery.deviceName)
+        line("celle", [battery.cellVendorCode, battery.cellLotCode]
+            .compactMap { $0 }.joined(separator: "  lotto "))
+        line("firmware", battery.firmwareVersion)
+        line("revisione hardware", battery.hardwareRevision)
+        line("revisione celle", battery.cellRevision)
+        line("seriale", battery.serial)
+        if let reason = battery.notChargingReason, reason != 0,
+           battery.isCharging != true {
+            line("codice non-in-carica", String(format: "0x%X (non decodificato)",
+                                                reason))
         }
     }
 
@@ -455,6 +629,238 @@ enum CommandLineMode {
         exit(process.terminationStatus)
     }
 
+    /// Confronta la frequenza letta da IOReport con quella di
+    /// `powermetrics`, sulla stessa finestra temporale.
+    ///
+    /// Le due misure non possono coincidere al megahertz: powermetrics apre
+    /// una finestra di 500 ms, quella di IOReport la contiene ed e' un po'
+    /// piu' larga, e la frequenza di un cluster cambia molte volte dentro
+    /// quell'intervallo. Quello che il confronto deve escludere e' l'errore
+    /// *sistematico*: uno scarto sempre dello stesso segno, o della misura
+    /// di un intero gradino DVFS, non e' rumore di finestra.
+    private static func verifyFrequency(rounds: Int) {
+        guard let sampler = IOReportSampler() else {
+            fail("IOReport non disponibile")
+        }
+        print("confronto IOReport / powermetrics, \(rounds) coppie\n")
+        print("       IOReport     powermetrics      scarto    riposo")
+
+        // Le due misure si confrontano **solo quando il cluster e' saturo**.
+        //
+        // A cluster parzialmente fermo i due numeri divergono per
+        // definizione, non per errore: IOReport qui calcola la frequenza
+        // media *mentre i core lavoravano* — gli stati di riposo sono
+        // esclusi dalla media — mentre `freq_hz` di powermetrics e' una
+        // media su tutto l'intervallo. Con il cluster P saturo le due
+        // coincidono alla cifra (3204 contro 3204, scarto nullo); con il
+        // cluster fermo al 95% IOReport dice 1,2 GHz e powermetrics 0,7,
+        // e hanno ragione entrambe perche' stanno rispondendo a due domande
+        // diverse.
+        //
+        // Watt mostra la prima: "a che velocita' gira quando lavora" e'
+        // l'unica delle due in cui una limitazione termica si vede, perche'
+        // l'altra scende anche solo perche' non c'e' niente da fare.
+        // Per questo il verdetto si calcola sui soli campioni in cui il
+        // riposo e' sotto il 10% **da entrambe le parti**: gli altri si
+        // stampano — sono comunque informazione — ma non contano.
+        //
+        // Chiedere il riposo a tutt'e due le fonti e non solo a IOReport
+        // serve contro il disallineamento delle finestre: powermetrics
+        // misura per mezzo secondo dentro l'intervallo, piu' lungo, di
+        // IOReport, e se in quel mezzo secondo il carico e' finito le due
+        // guardano due macchine diverse. Con il solo riposo di IOReport
+        // quel campione entrava nel conto e produceva scarti di centinaia
+        // di megahertz che sembravano un errore di calcolo.
+        var deltas: [Double] = []
+        var discarded = 0
+
+        for _ in 0..<max(1, rounds) {
+            // Apre la finestra di IOReport: questo campione viene scartato,
+            // conta solo come istante d'inizio.
+            _ = sampler.sample()
+
+            let sample: PowerSample? = callHelper(timeout: 30) { proxy, done in
+                proxy.sampleMetrics { data in
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = .iso8601
+                    done(data.flatMap { try? decoder.decode(PowerSample.self, from: $0) })
+                }
+            }
+            let reading = sampler.sample()
+
+            func row(_ tag: String, _ mine: Double?, _ theirs: Double?,
+                     _ idle: Double?, _ theirIdle: Double? = nil) -> Bool {
+                guard let mine else { return false }
+                guard let theirs else {
+                    print(String(format: "  %@  %7.0f MHz          n/d           -",
+                                 tag, mine))
+                    return false
+                }
+                let busy = (idle.map { $0 < 0.10 } ?? false)
+                    && (theirIdle.map { $0 < 0.10 } ?? true)
+                print(String(format: "  %@  %7.0f MHz     %7.0f MHz   %+6.0f MHz   %4.0f%%%@",
+                             tag, mine, theirs, mine - theirs,
+                             (idle ?? 0) * 100, busy ? "" : "  (scartato)"))
+                return busy
+            }
+
+            if row("P", reading.pCoreMHz, sample?.pCoreMHz,
+                   reading.pCoreIdleFraction, sample?.pCoreIdleRatio),
+               let mine = reading.pCoreMHz, let theirs = sample?.pCoreMHz {
+                deltas.append(mine - theirs)
+            } else if sample?.pCoreMHz != nil {
+                discarded += 1
+            }
+            _ = row("E", reading.eCoreMHz, sample?.eCoreMHz,
+                    reading.eCoreIdleFraction)
+        }
+
+        guard !deltas.isEmpty else {
+            print("\nnessuna coppia confrontabile.")
+            print(discarded > 0
+                ? "  in tutti i \(discarded) campioni il cluster P non era carico "
+                + "abbastanza\n  perche' le due misure siano la stessa grandezza. "
+                + "Mettilo sotto carico:\n\n    Watt --load 8 60 &\n    Watt "
+                + "--verify-freq 5\n"
+                : "  helper irraggiungibile?")
+            return
+        }
+        let mean = deltas.reduce(0, +) / Double(deltas.count)
+        let worst = deltas.map(abs).max() ?? 0
+        let sameSign = deltas.allSatisfy { $0 > 0 } || deltas.allSatisfy { $0 < 0 }
+        print(String(format: "\n%d campioni a cluster saturo, %d scartati",
+                     deltas.count, discarded))
+        print(String(format: "scarto medio %+.0f MHz, massimo %.0f MHz", mean, worst))
+        // Un errore che cambia segno e' rumore di finestra; uno che non lo
+        // cambia mai e' un errore di calcolo, ed e' l'unico che va corretto.
+        print(sameSign && abs(mean) > 150
+            ? "  ⚠︎  sempre lo stesso segno: scarto sistematico, non rumore"
+            : "  ✓  segno alternato o scarto piccolo: coerente col rumore di finestra")
+    }
+
+    /// Mostra come si comporta la lettura adattiva giro per giro.
+    ///
+    /// Serve a distinguere un fenomeno fisico da un artefatto di
+    /// campionamento: se la media si muove insieme al *numero di sensori
+    /// letti*, non e' il Mac che sta scaldando a intermittenza.
+    private static func watchTemperatures(seconds: Int) {
+        guard let sensors = ThermalSensors() else {
+            fail(L("Thermal sensors are not readable on this system."))
+        }
+        // La colonna "full" e' la chiave di lettura di tutta la tabella: se
+        // un salto della media coincide con una scansione completa, quel
+        // salto e' il cambio di popolazione, non il Mac che scalda.
+        print("giro  letti  full   max    media(letti)  media(die)")
+        for tick in 0..<max(1, seconds) {
+            let summary = sensors.readAdaptive()
+            let all = summary.all.map(\.celsius)
+            let mean = all.isEmpty ? 0 : all.reduce(0, +) / Double(all.count)
+            print(String(format: "%4d  %5d  ", tick, all.count)
+                + (sensors.lastTickWasFullScan ? "si  " : "-   ")
+                + String(format: "%5.1f  %8.1f  %11.1f",
+                         summary.socCelsius ?? 0, mean,
+                         summary.socAverageCelsius ?? 0))
+            Thread.sleep(forTimeInterval: 1)
+        }
+    }
+
+    /// Confronto appaiato fra la pressione termica letta dal kernel e quella
+    /// riportata da `powermetrics`.
+    ///
+    /// E' la prova che rende lecito smettere di pagare mezzo secondo di
+    /// powermetrics per un dato che il kernel pubblica gratis. Le due letture
+    /// vanno prese vicine: `powermetrics` misura su una finestra di mezzo
+    /// secondo, quindi il livello del kernel si campiona **prima e dopo** la
+    /// chiamata e si accetta l'accordo se coincide con almeno uno dei due —
+    /// un cambio di livello proprio dentro la finestra non e' un disaccordo
+    /// fra le fonti, e' un cambio di stato del Mac.
+    private static func verifyPressure(rounds: Int) {
+        let monitor = ThermalPressureMonitor()
+        guard monitor.level != nil else {
+            fail("Il kernel non pubblica com.apple.system.thermalpressurelevel "
+               + "su questo sistema.")
+        }
+        print("confronto pressione termica: kernel contro powermetrics\n")
+        print("giro   kernel(prima)  powermetrics   kernel(dopo)   esito")
+        func pad(_ text: String?) -> String {
+            (text ?? "?").padding(toLength: 15, withPad: " ", startingAt: 0)
+        }
+
+        var agreed = 0
+        var compared = 0
+        for round in 0..<max(1, rounds) {
+            let before = monitor.level
+            let sample: PowerSample? = callHelper(timeout: 30) { proxy, done in
+                proxy.sampleMetrics { data in
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = .iso8601
+                    done(data.flatMap { try? decoder.decode(PowerSample.self, from: $0) })
+                }
+            }
+            let after = monitor.level
+            guard let raw = sample?.thermalPressureRaw else {
+                print(String(format: "%4d   ", round)
+                    + pad(before?.rawValue) + pad("n/d") + pad(after?.rawValue)
+                    + "helper assente")
+                continue
+            }
+            let theirs = ThermalPressure(raw: raw)
+            compared += 1
+            let ok = theirs == before || theirs == after
+            if ok { agreed += 1 }
+            print(String(format: "%4d   ", round)
+                + pad(before?.rawValue) + pad(raw) + pad(after?.rawValue)
+                + (ok ? "=" : "DIVERSO"))
+        }
+
+        guard compared > 0 else {
+            print("\nnessuna coppia valida: helper irraggiungibile?")
+            return
+        }
+        print(String(format: "\n%d coppie su %d in accordo", agreed, compared))
+        print(agreed == compared
+            ? "  ✓  le due fonti coincidono: il kernel puo' sostituire powermetrics"
+            : "  ⚠︎  disaccordo: la pressione va continuata a leggere da powermetrics")
+    }
+
+    /// Carico sintetico a QoS `userInteractive`, per misurare il throttling.
+    ///
+    /// La QoS non e' un dettaglio: un ciclo di shell eredita la classe
+    /// `background`, e macOS confina i thread di quella classe sugli E-core.
+    /// Otto cicli `while :; do :; done` fanno sudare gli E-core e lasciano il
+    /// cluster P a 1188 MHz — la prova sembra girare e non misura niente.
+    /// Con `userInteractive` lo scheduler li mette sui P-core e la curva di
+    /// throttling e' quella vera.
+    private static func generateLoad(threads: Int, seconds: Double) {
+        let count = threads > 0 ? threads : ProcessInfo.processInfo.activeProcessorCount
+        let deadline = Date().addingTimeInterval(max(1, seconds))
+        print(String(format: "carico su %d thread a QoS userInteractive per %.0f s",
+                     count, max(1, seconds)))
+        print("(ctrl-C per fermarlo prima)")
+
+        let group = DispatchGroup()
+        for _ in 0..<count {
+            DispatchQueue.global(qos: .userInteractive).async(group: group) {
+                // Catena di dipendenze in virgola mobile: nessuna scrittura
+                // in memoria, quindi si misura il clock del core e non la
+                // banda verso la RAM.
+                var accumulator = 1.0000001
+                while Date() < deadline {
+                    for _ in 0..<200_000 {
+                        accumulator = accumulator * 1.0000001 + 1e-9
+                    }
+                    if accumulator > 1e300 { accumulator = 1.0000001 }
+                }
+                // Impedisce all'ottimizzatore di cancellare tutto il ciclo:
+                // senza, il carico si riduce a un `return` e la prova
+                // misurerebbe una macchina ferma.
+                if accumulator == .infinity { print("") }
+            }
+        }
+        group.wait()
+        print("finito")
+    }
+
     // MARK: - Client XPC sincrono
 
     /// Attende la risposta dell'helper con un semaforo: in modalita' CLI non
@@ -491,9 +897,14 @@ enum CommandLineMode {
             semaphore.signal()
         }
 
-        // Applicare "Massimo" comporta purge piu
-        // taskpolicy su tutti i daemon vivi: qualche secondo e' normale.
-        if semaphore.wait(timeout: .now() + 90) == .timedOut { return nil }
+        // L'attesa e' quella che il chiamante ha chiesto.
+        //
+        // Il parametro c'era gia', con tanto di spiegazione del perche'
+        // servisse, e non veniva usato: si aspettavano novanta secondi per
+        // qualunque chiamata, letture comprese. Un parametro documentato e
+        // ignorato e' peggio di un parametro assente — chi legge il codice
+        // crede che il comportamento sia quello scritto.
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut { return nil }
         return box.value
     }
 
@@ -518,8 +929,11 @@ private func benchmark() {
         let start = Date()
         for _ in 0..<iterations { body() }
         let each = Date().timeIntervalSince(start) / Double(iterations) * 1000
-        print(String(format: "   %-28@ %6.2f ms   %5.2f%% a 1 Hz",
-                     label as NSString, each, each / 10))
+        // `%-28@` non allinea: la larghezza minima vale per le stringhe C,
+        // non per gli oggetti, e String(format:) la ignora in silenzio. Le
+        // colonne uscivano tutte a filo e la tabella era illeggibile.
+        print("   " + label.padding(toLength: 26, withPad: " ", startingAt: 0)
+            + String(format: "%7.2f ms   %5.2f%% a 1 Hz", each, each / 10))
     }
 
     print("costo di un giro di campionamento\n")
@@ -535,6 +949,11 @@ private func benchmark() {
         time("frequenze (IOReport)") { _ = sampler.sample() }
     }
     time("memoria") { _ = MemoryReader.read() }
+    // La pressione termica: e' questa riga a giustificare l'aver smesso di
+    // chiamare powermetrics per averla. Il confronto e' con ~500 ms.
+    let pressure = ThermalPressureMonitor()
+    time("pressione (kernel)") { _ = pressure.level }
+    time("batteria (registro IO)") { _ = BatteryReader.read() }
     print("\nla percentuale e' il costo continuo se la lettura")
     print("viene ripetuta una volta al secondo.")
 

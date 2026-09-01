@@ -68,6 +68,28 @@ public enum ThermalPressure: String, Codable, Sendable {
         }
     }
 
+    /// Traduce il livello pubblicato dal kernel su
+    /// `com.apple.system.thermalpressurelevel`.
+    ///
+    /// Su macOS `OSThermalPressureLevel` e' un enum senza valori espliciti a
+    /// partire da zero: 0…4 nell'ordine nominale, moderata, pesante,
+    /// trapping, sleeping. Su iOS la stessa enum e' numerata 0, 10, 20, 30,
+    /// 40, 50 e ha un livello "light" in piu': un valore fuori da 0…4 non e'
+    /// un livello di questa piattaforma e va trattato come sconosciuto,
+    /// **non** ricondotto al piu' vicino. Dire "nominale" davanti a un
+    /// numero che non si e' capito e' l'errore che questa app esiste per non
+    /// commettere.
+    public init?(kernelLevel: UInt64) {
+        switch kernelLevel {
+        case 0: self = .nominal
+        case 1: self = .moderate
+        case 2: self = .heavy
+        case 3: self = .trapping
+        case 4: self = .sleeping
+        default: return nil
+        }
+    }
+
     public var symbolName: String {
         switch self {
         case .nominal, .unknown: return "checkmark.circle.fill"
@@ -78,18 +100,78 @@ public enum ThermalPressure: String, Codable, Sendable {
     }
 }
 
+/// Da dove viene la pressione termica di un campione.
+///
+/// Non e' un dettaglio di implementazione: cambia quanto ci si puo' fidare
+/// del valore, e quindi cosa l'app ha il diritto di dichiarare. Tenere le
+/// fonti indistinguibili era il motivo per cui Watt taceva mentre asitop
+/// segnalava, e poi — corretta la prima volta a meta' — il motivo per cui
+/// una misura pagata con un powermetrics veniva sovrascritta da una stima.
+public enum ThermalPressureSource: String, Codable, Sendable {
+    /// `com.apple.system.thermalpressurelevel`, letta dal kernel. E' la
+    /// stessa sorgente che legge `powermetrics`, ma senza processi ne'
+    /// privilegi, quindi disponibile a ogni giro.
+    case kernel
+    /// Campo `thermal_pressure` di `powermetrics`, via helper.
+    case powermetrics
+    /// `ProcessInfo.thermalState`: quattro gradini, e sbaglia di un livello
+    /// intero rispetto alla misura. Ripiego, non misura.
+    case processInfo
+    case unknown
+
+    /// `true` quando il valore e' quello che il sistema usa davvero per
+    /// dichiarare la limitazione.
+    public var isMeasured: Bool {
+        switch self {
+        case .kernel, .powermetrics: return true
+        case .processInfo, .unknown: return false
+        }
+    }
+
+    public var label: String {
+        switch self {
+        case .kernel:       return L("kernel")
+        case .powermetrics: return L("powermetrics")
+        case .processInfo:  return L("ProcessInfo estimate")
+        case .unknown:      return L("unknown")
+        }
+    }
+}
+
+/// Quanto e' grave la situazione termica, ai fini di cosa mostrare.
+///
+/// Tre gradini invece di due perche' una misura vera di "Moderata" merita di
+/// essere detta — asitop la conta gia' come `throttle: yes` — ma non merita
+/// il triangolo rosso che si usa per "Pesante". Con una sola soglia si
+/// finisce o per allarmare sempre o per tacere quando conta.
+public enum ThermalSeverity: Sendable {
+    case none, notice, alarm
+}
+
 /// Campione di telemetria prodotto dall'helper via `powermetrics`.
 ///
 /// Le unita' sono quelle native del plist di `powermetrics`, verificate su
 /// Mac14,15 / macOS 27: `freq_hz` in hertz, le potenze in **milliwatt**
 /// (un M2 Air a riposo riporta ~800, cioe' 0,8 W).
 public struct PowerSample: Codable, Sendable {
-    /// Frequenza media dei P-core **mentre erano attivi**, in MHz.
+    /// Frequenza media dei P-core, in MHz.
     ///
-    /// `powermetrics` calcola gia' `freq_hz` scorporando l'inattivita': la
-    /// somma di `used_ratio` sugli stati DVFM equivale a `1 - idle_ratio`, e
-    /// la media pesata su quegli stati restituisce esattamente `freq_hz`.
-    /// Dividerla ancora per la quota attiva la gonfierebbe.
+    /// Attenzione: **non e' la stessa grandezza** a seconda di chi riempie
+    /// il campo, e il commento che stava qui sosteneva il contrario.
+    ///
+    /// - da `IOReportSampler`, che e' la fonte usata dall'app, e' la media
+    ///   *mentre i core lavoravano*: gli stati di riposo sono esclusi;
+    /// - da `powermetrics`, che e' la fonte usata dall'helper, `freq_hz` e'
+    ///   una media sull'intervallo intero.
+    ///
+    /// A cluster saturo coincidono alla cifra — `--verify-freq` sotto carico
+    /// da' scarto nullo su quattro campioni su quattro. A cluster fermo
+    /// divergono di centinaia di megahertz, e la vecchia affermazione
+    /// ("powermetrics scorpora gia' l'inattivita'") faceva sembrare quella
+    /// divergenza un errore di calcolo di Watt.
+    ///
+    /// Quella che va mostrata e' la prima: e' l'unica in cui una limitazione
+    /// termica si distingue dall'assenza di lavoro.
     public var pCoreMHz: Double?
     public var eCoreMHz: Double?
     /// Massimo stato DVFM esposto dal cluster: il tetto reale del silicio.
@@ -104,6 +186,53 @@ public struct PowerSample: Codable, Sendable {
     public var aneMilliwatts: Double?
 
     public var thermalPressureRaw: String?
+    /// `true` quando `thermalPressureRaw` viene da `powermetrics` e non
+    /// dalla traduzione di `ProcessInfo.thermalState`.
+    ///
+    /// I due non sono la stessa cosa. `powermetrics` riporta il campo
+    /// `thermal_pressure` che il sistema usa per dichiarare la limitazione —
+    /// e' quello, e solo quello, che asitop mostra come "throttle: yes".
+    /// `ProcessInfo` ne da' una versione a quattro gradini che segnala
+    /// "fair" gia' sotto un carico ordinario. Trattarli allo stesso modo
+    /// significa o allarmare sempre o non allarmare mai: distinguerli
+    /// permette di credere al primo e restare prudenti col secondo.
+    ///
+    /// Il campo e' opzionale nella codifica di proposito. La decodifica
+    /// sintetizzata di Swift **non** applica i valori predefiniti: una
+    /// proprieta' non opzionale aggiunta qui fa fallire la decodifica di
+    /// ogni campione prodotto da un helper piu' vecchio, e l'app perde di
+    /// colpo watt, frequenze e pressione — tutto, non solo il campo nuovo.
+    /// Un helper si aggiorna con `sudo`, l'app no: devono potersi parlare
+    /// anche disallineati.
+    private var thermalPressureMeasuredRaw: Bool?
+    /// Sorgente esplicita, aggiunta dopo il flag booleano. Anche questa e'
+    /// opzionale per la stessa ragione: un helper piu' vecchio non la manda,
+    /// e la sua assenza non deve far fallire la decodifica dell'intero
+    /// campione.
+    private var thermalPressureSourceRaw: String?
+
+    public var thermalPressureSource: ThermalPressureSource {
+        get {
+            if let raw = thermalPressureSourceRaw,
+               let source = ThermalPressureSource(rawValue: raw) {
+                return source
+            }
+            // Campione prodotto da un helper che conosce solo il flag:
+            // se dice "misurata", l'unica misura che sapeva fare era
+            // powermetrics.
+            if thermalPressureMeasuredRaw == true { return .powermetrics }
+            return thermalPressureRaw == nil ? .unknown : .processInfo
+        }
+        set {
+            thermalPressureSourceRaw = newValue.rawValue
+            // Il flag resta scritto per gli *altri* lettori: un binario
+            // vecchio che decodifica un campione nuovo continua a capire
+            // se fidarsi.
+            thermalPressureMeasuredRaw = newValue.isMeasured
+        }
+    }
+
+    public var thermalPressureMeasured: Bool { thermalPressureSource.isMeasured }
     public var sampledAt: Date
 
     public init(pCoreMHz: Double? = nil, eCoreMHz: Double? = nil,
@@ -127,6 +256,36 @@ public struct PowerSample: Codable, Sendable {
 
     public var thermalPressure: ThermalPressure {
         ThermalPressure(raw: thermalPressureRaw)
+    }
+
+    /// `true` quando il sistema sta dichiarando una limitazione termica su
+    /// una misura vera, non su una stima.
+    ///
+    /// E' la condizione in cui asitop scrive "throttle: yes": qualunque
+    /// pressione diversa da `Nominal`. A quel punto non e' piu' una
+    /// prudenza, e vale la pena dirlo anche a "Moderata".
+    public var isThermallyLimited: Bool {
+        thermalPressureMeasured && thermalPressure.isThrottling
+    }
+
+    /// Cosa mostrare, tenendo conto sia del livello sia di quanto e'
+    /// affidabile la fonte.
+    ///
+    /// Una "Moderata" **misurata** vale un avviso discreto: il sistema sta
+    /// gia' limitando qualcosa. La stessa "Moderata" **stimata** da
+    /// `ProcessInfo` no: quella compare sotto un carico ordinario, con i
+    /// core ancora quasi al tetto, e accendere li' un avviso significa
+    /// tenerlo acceso quasi sempre.
+    public var thermalSeverity: ThermalSeverity {
+        guard thermalPressureMeasured else {
+            // Sulla stima si resta al comportamento prudente di prima.
+            return thermalPressure.demandsAttention ? .alarm : .none
+        }
+        switch thermalPressure {
+        case .nominal, .unknown:   return .none
+        case .moderate:            return .notice
+        case .heavy, .trapping, .sleeping: return .alarm
+        }
     }
 
     public var pCoreGHzText: String? {

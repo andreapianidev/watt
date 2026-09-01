@@ -124,6 +124,26 @@ public final class ThermalSensors {
     private var tick = 0
     private var hotIndices: [Int] = []
     private var lastSlow: [Reading] = []
+    /// Ultima temperatura nota di **ogni** sensore del die, anche di quelli
+    /// non riletti in questo giro.
+    ///
+    /// Senza, la media veniva calcolata sui soli sensori presenti nel
+    /// campione: quattro nei giri veloci, sedici in quelli completi. La media
+    /// di quattro sensori scelti *perche' sono i piu' caldi* e' piu' alta
+    /// della media di tutti e sedici, e il grafico mostrava un dente di sega
+    /// perfettamente periodico — un artefatto del campionamento, che si
+    /// legge come throttling intermittente e non lo e'.
+    private var lastDie: [String: Double] = [:]
+    /// Massimo del die all'ultima scansione completa: il riferimento contro
+    /// cui si misura se il calore si sta muovendo.
+    private var lastFullMax: Double?
+    /// Giro dell'ultima scansione completa richiesta dal movimento, per non
+    /// chiederne una a ogni giro durante una rampa.
+    private var lastForcedScanTick = Int.min / 2
+    /// `true` se il giro appena concluso ha riletto tutto il die. Serve alla
+    /// diagnostica: senza saperlo non si puo' distinguere un salto vero da
+    /// un cambio di popolazione.
+    public private(set) var lastTickWasFullScan = false
 
     private static let appleVendorPage: Int64 = 0xff00
     private static let temperatureUsage: Int64 = 5
@@ -230,18 +250,57 @@ public final class ThermalSensors {
     ///   un grado in qualche minuto, e nel frattempo si tiene l'ultimo valore
     ///   invece di far sparire la riga dal menu.
     ///
-    /// Il prezzo e' che subito dopo uno spostamento di carico il massimo puo'
-    /// essere sottostimato di un grado o due, per meno di dieci secondi.
+    /// Perche' non basta la scansione periodica.
+    ///
+    /// Con la sola scadenza a giri fissi, per nove giri su dieci il massimo
+    /// era il massimo di **quattro** sensori, non di sedici: se il carico si
+    /// spostava su un cluster escluso dall'insieme caldo, la barra dei menu
+    /// mostrava un picco piu' basso di quello vero fino alla rilettura
+    /// successiva — venti secondi alla cadenza predefinita. Un'app che
+    /// promette la temperatura di picco non puo' permettersi venti secondi
+    /// di picco sbagliato proprio nel momento in cui il carico cambia, che
+    /// e' quando qualcuno la sta guardando.
+    ///
+    /// Quindi il die si rilegge per intero anche **fuori scadenza**, appena
+    /// l'insieme caldo si muove di piu' di un grado rispetto all'ultima
+    /// scansione completa. A macchina ferma non succede mai e il costo
+    /// resta quello di prima; sotto un transitorio succede a ogni giro, ed
+    /// e' esattamente il momento in cui vale la pena spenderlo.
     public func readAdaptive() -> Summary {
         defer { tick += 1 }
 
-        let fullDie = tick % Self.dieRescanEvery == 0
         let withSlow = tick % Self.slowRescanEvery == 0
+        var fullDie = tick % Self.dieRescanEvery == 0
 
         var indices = fullDie ? barIndices : hotIndices
         if withSlow { indices += slowIndices }
-
         var readings = readValues(at: indices)
+
+        // Il calore si sta muovendo? Allora il sottoinsieme caldo non e'
+        // piu' affidabile e si paga subito la scansione completa.
+        //
+        // La soglia sta **sopra il rumore**, non appena sopra lo zero.
+        // `--bench` misura fra due letture complete consecutive uno scarto
+        // medio di mezzo grado con punte di un grado e mezzo: con la soglia
+        // a un grado la scansione completa scattava sul rumore, a macchina
+        // ferma, e il costo del campionamento adattivo era raddoppiato per
+        // inseguire oscillazioni che non erano niente. Due gradi il rumore
+        // non li fa; un carico che parte li fa in un secondo.
+        //
+        // Il tempo minimo fra due scansioni fuori scadenza serve al caso
+        // opposto: durante una rampa la soglia e' superata a ogni giro, e
+        // senza freno il metodo adattivo tornerebbe a essere la lettura
+        // completa con qualche riga in piu'.
+        if !fullDie, tick - lastForcedScanTick >= Self.minimumTicksBetweenForcedScans,
+           let reference = lastFullMax,
+           let hotMax = readings.filter({ $0.category == .die })
+               .map(\.celsius).max(),
+           abs(hotMax - reference) > Self.rescanTriggerCelsius {
+            let remaining = barIndices.filter { !hotIndices.contains($0) }
+            readings += readValues(at: remaining)
+            fullDie = true
+            lastForcedScanTick = tick
+        }
 
         if fullDie {
             // Aggiorna l'insieme caldo con i piu' caldi appena misurati.
@@ -250,7 +309,9 @@ public final class ThermalSensors {
             let names = Set(ranked.prefix(Self.hotCount).map(\.name))
             let updated = barIndices.filter { names.contains(self.names[$0]) }
             if !updated.isEmpty { hotIndices = updated }
+            lastFullMax = ranked.first?.celsius
         }
+        lastTickWasFullScan = fullDie
 
         // Batteria e SSD: se non sono stati riletti in questo giro, si
         // riusa l'ultima misura invece di lasciare la riga vuota.
@@ -260,12 +321,33 @@ public final class ThermalSensors {
             readings += lastSlow
         }
 
-        return summary(from: readings)
+        var result = summary(from: readings)
+
+        // Massimo e media del die vanno sempre sulla stessa popolazione,
+        // altrimenti a cambiare non e' la temperatura ma l'insieme su cui le
+        // si calcola. I sensori non riletti in questo giro entrano con
+        // l'ultimo valore noto: e' un dato vecchio di pochi secondi su un
+        // pezzo di silicio i cui punti stanno entro un grado e mezzo, ed e'
+        // comunque meno sbagliato che escluderli.
+        for reading in readings where reading.category == .die {
+            lastDie[reading.name] = reading.celsius
+        }
+        if !lastDie.isEmpty {
+            result.socCelsius = lastDie.values.max()
+            result.socAverageCelsius =
+                lastDie.values.reduce(0, +) / Double(lastDie.count)
+        }
+        return result
     }
 
     private static let hotCount = 4
     private static let dieRescanEvery = 10
     private static let slowRescanEvery = 30
+    /// Quanto deve muoversi l'insieme caldo per far scattare una scansione
+    /// completa fuori scadenza.
+    private static let rescanTriggerCelsius = 2.0
+    /// Giri minimi fra due scansioni forzate.
+    private static let minimumTicksBetweenForcedScans = 3
 
     /// Legge i soli sensori del die: e' tutto cio' che servono la barra dei
     /// menu e il grafico.

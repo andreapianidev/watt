@@ -16,23 +16,44 @@ SAMPLES="${1:-10}"
 INTERVAL="${2:-15}"
 OUT="$(mktemp -t thermal-curve.XXXXXX)"
 CORES=$(sysctl -n hw.ncpu)
+DURATION=$((SAMPLES * INTERVAL + 10))
+
+# Il carico lo genera Watt, non la shell.
+#
+# La versione precedente lanciava un ciclo `while :; do :; done` per core.
+# Sembrava saturare la macchina e non misurava niente: un processo di shell
+# eredita la classe QoS `background`, e macOS confina i thread di quella
+# classe sugli E-core. Otto cicli facevano sudare il cluster E mentre il
+# cluster P restava a 1188 MHz per tutta la prova — cioe' la curva di
+# throttling veniva misurata su dei core che non stavano lavorando.
+#
+# `Watt --load` apre i thread a QoS `userInteractive`, che e' quella di
+# un'applicazione in primo piano: lo scheduler li mette sui P-core e la
+# frequenza sale davvero al massimo multicore.
+WATT=""
+for candidate in "$(dirname "$0")/../build/Watt.app/Contents/MacOS/Watt" \
+                 "/Applications/Watt.app/Contents/MacOS/Watt" \
+                 "$(command -v Watt || true)"; do
+    if [[ -x "$candidate" ]]; then WATT="$candidate"; break; fi
+done
+if [[ -z "$WATT" ]]; then
+    echo "ERRORE: Watt non trovato. Compilalo con ./scripts/build.sh" >&2
+    exit 1
+fi
 
 echo "==> $(sysctl -n hw.model), $CORES core"
 echo "==> $SAMPLES campioni ogni ${INTERVAL}s (circa $((SAMPLES * INTERVAL))s totali)"
-echo "==> Avvio del carico su tutti i core"
+echo "==> Carico su $CORES thread a QoS userInteractive"
 
-PIDS=()
-for _ in $(seq "$CORES"); do
-    ( while :; do :; done ) &
-    PIDS+=($!)
-done
+"$WATT" --load "$CORES" "$DURATION" >/dev/null 2>&1 &
+LOAD=$!
 # Il carico va fermato comunque, anche se lo script viene interrotto a meta'.
-trap 'kill "${PIDS[@]}" 2>/dev/null || true' EXIT INT TERM
+trap 'kill "$LOAD" 2>/dev/null || true' EXIT INT TERM
 
 sudo powermetrics --samplers cpu_power,thermal \
     -n "$SAMPLES" -i "$((INTERVAL * 1000))" --format plist > "$OUT" 2>/dev/null
 
-kill "${PIDS[@]}" 2>/dev/null || true
+kill "$LOAD" 2>/dev/null || true
 
 python3 - "$OUT" "$INTERVAL" <<'PYEOF'
 import plistlib, sys

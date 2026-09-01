@@ -51,14 +51,23 @@ enum Preferences {
         var label: String {
             switch self {
             case .frequency:   return L("P-core frequency")
-            case .socMax:      return L("Peak temperature")
-            case .socAverage:  return L("Average temperature")
+            case .socMax:      return L("Peak temperature (hottest die sensor)")
+            case .socAverage:  return L("Average temperature (all die sensors)")
             case .battery:     return L("Battery temperature")
             case .storage:     return L("SSD temperature")
-            case .freqAndTemp: return L("Frequency and temperature")
+            case .freqAndTemp: return L("Frequency and peak temperature")
             }
         }
     }
+
+    /// Cosa mostrare quando nessuno ha ancora scelto.
+    ///
+    /// Frequenza piu' **picco**, mai la media. Il picco e' il numero che
+    /// decide quando il sistema comincia a limitare, e la media dei sedici
+    /// sensori del die sta sempre qualche grado sotto: mostrarla in barra
+    /// dei menu significa dire che il Mac e' piu' freddo di quanto sia nel
+    /// punto che conta. La media resta disponibile, ma va scelta.
+    static let defaultBarDisplay = BarDisplay.freqAndTemp
 
     static var barDisplay: BarDisplay {
         get {
@@ -70,19 +79,35 @@ enum Preferences {
             // che se la ritrova cambiata e non ha modo di capire perche'.
             switch stored {
             case "temperature": return .socMax
-            case "both":        return .freqAndTemp
-            default:            return .freqAndTemp
+            case "both":        return defaultBarDisplay
+            default:            return defaultBarDisplay
             }
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "barDisplay") }
     }
 
-    /// Cadenza di aggiornamento, con il costo di ciascuna scelta.
+    /// Cadenza di aggiornamento.
     ///
-    /// Leggere i sedici sensori sul die costa circa 17 ms, quindi un
-    /// aggiornamento al secondo occupa l'1,7% di un core in permanenza. È
-    /// poco ma non è zero, e su un'app che resta accesa per giorni va detto
-    /// invece che nascosto.
+    /// Le etichette dicevano un costo per ciascuna scelta — «1 secondo
+    /// (~1,7% di un core)» e a scendere — ricavato dal tempo di lettura dei
+    /// sensori. Misurando il processo invece che il singolo pezzo, quei
+    /// numeri sono risultati sbagliati, e non di poco: su M2 Air, a menu
+    /// chiuso,
+    ///
+    ///     cadenza 2 s, frequenza + picco in barra     1,9% di un core
+    ///     cadenza 2 s, solo picco in barra            1,2%
+    ///     cadenza 10 s, testo quasi fermo             0,4%
+    ///
+    /// Il campionamento vero e proprio è quello 0,4%. Tutto il resto è
+    /// AppKit che ridisegna l'elemento in barra dei menu ogni volta che il
+    /// testo cambia — nel profilo del processo è
+    /// `NSStatusItem _updateReplicants`, due terzi del totale. Da cui:
+    /// rallentare la cadenza aiuta molto meno di quanto sembri, e scegliere
+    /// una grandezza che cambia di rado aiuta molto di più.
+    ///
+    /// Le etichette quindi non promettono più una percentuale per opzione:
+    /// promettere un numero misurato male è peggio che non prometterne.
+    /// Il costo si misura con `Watt --bench` e col profilo del processo.
     enum Cadence: Double, CaseIterable {
         case realtime = 1
         case fast = 2
@@ -91,10 +116,10 @@ enum Preferences {
 
         var label: String {
             switch self {
-            case .realtime: return L("1 second (~1.7%% of a core)")
-            case .fast:     return L("2 seconds (~0.9%%)")
-            case .normal:   return L("5 seconds (~0.3%%)")
-            case .relaxed:  return L("10 seconds (~0.2%%)")
+            case .realtime: return L("1 second")
+            case .fast:     return L("2 seconds")
+            case .normal:   return L("5 seconds")
+            case .relaxed:  return L("10 seconds")
             }
         }
     }

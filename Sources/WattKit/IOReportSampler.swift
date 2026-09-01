@@ -25,6 +25,15 @@ public final class IOReportSampler {
         public var eCoreMHz: Double?
         public var pCoreCeilingMHz: Double?
         public var eCoreCeilingMHz: Double?
+        /// Quota dell'intervallo in cui il cluster e' rimasto fermo (0...1).
+        ///
+        /// Senza questa, `pCoreMHz` da sola e' ambigua: 1,1 GHz puo' voler
+        /// dire "limitato" oppure "non c'era niente da fare", e sono due
+        /// diagnosi opposte. E' anche la chiave per capire il confronto con
+        /// `powermetrics`, che quando il cluster non e' saturo riporta una
+        /// media diversa perche' la calcola su una popolazione diversa.
+        public var pCoreIdleFraction: Double?
+        public var eCoreIdleFraction: Double?
     }
 
     // MARK: - Simboli
@@ -152,6 +161,8 @@ public final class IOReportSampler {
         trace.removeAll()
         var pMHz: Double?
         var eMHz: Double?
+        var pIdle: Double?
+        var eIdle: Double?
 
         _ = iterate(delta) { [self] channel in
             let group = channelGroup(channel)?.takeUnretainedValue() as String? ?? ""
@@ -170,15 +181,23 @@ public final class IOReportSampler {
 
             let isPerformance = upper == "PCPM"
             let states = isPerformance ? pStates : eStates
-            guard let mhz = averageFrequency(channel: channel, states: states)
+            guard let measured = averageFrequency(channel: channel, states: states)
             else { return 0 }
 
-            if isPerformance { pMHz = mhz } else { eMHz = mhz }
+            if isPerformance {
+                pMHz = measured.mhz
+                pIdle = measured.idleFraction
+            } else {
+                eMHz = measured.mhz
+                eIdle = measured.idleFraction
+            }
             return 0
         }
 
         reading.pCoreMHz = pMHz
         reading.eCoreMHz = eMHz
+        reading.pCoreIdleFraction = pIdle
+        reading.eCoreIdleFraction = eIdle
         return reading
     }
 
@@ -195,9 +214,12 @@ public final class IOReportSampler {
     /// risponde e' "a che velocita' gira quando lavora", non "quanto ha
     /// lavorato". Includerli farebbe crollare il numero ogni volta che il
     /// Mac e' fermo, che e' il momento in cui interessa meno.
-    private func averageFrequency(channel: CFDictionary, states: [Double]) -> Double? {
+    private func averageFrequency(
+        channel: CFDictionary, states: [Double]
+    ) -> (mhz: Double, idleFraction: Double)? {
         var weighted = 0.0
         var total = 0.0
+        var idleResidency = 0.0
         var frequencyIndex = 0
         let name = channelName(channel)?.takeUnretainedValue() as String? ?? "?"
         trace.append("canale \(name), \(stateCount(channel)) stati, "
@@ -208,7 +230,18 @@ public final class IOReportSampler {
                 .uppercased()
             let isIdle = label.contains("IDLE") || label.contains("OFF")
                       || label.contains("DOWN")
-            if isIdle { continue }
+            if isIdle {
+                // Va tracciato lo stesso. Escluderlo in silenzio rendeva
+                // impossibile capire, guardando la diagnostica, se la
+                // differenza con powermetrics venisse da qui o dal resto:
+                // un bucket saltato e non stampato e' un bucket di cui non
+                // si conosce il peso.
+                idleResidency += Double(stateResidency(channel, index))
+                trace.append(String(format: "  [%2d] %-8@ ->   riposo  residenza %d",
+                                    index, label as NSString,
+                                    Int(stateResidency(channel, index))))
+                continue
+            }
 
             defer { frequencyIndex += 1 }
             guard frequencyIndex < states.count else { continue }
@@ -222,7 +255,10 @@ public final class IOReportSampler {
         guard total > 0 else { return nil }
         trace.append(String(format: "  somma pesata %.0f / totale %.0f = %.0f MHz",
                             weighted, total, weighted / total))
-        return weighted / total
+        trace.append(String(format: "  riposo %.0f su %.0f tick = %.1f%% del tempo",
+                            idleResidency, idleResidency + total,
+                            idleResidency / (idleResidency + total) * 100))
+        return (weighted / total, idleResidency / (idleResidency + total))
     }
 
     // MARK: - Tabella DVFS

@@ -27,6 +27,12 @@ if [[ -z "$IDENTITY" && "${WATT_UNSIGNED:-0}" != "1" ]]; then
 fi
 
 SIGN_OPTS=(--options runtime)
+# Marca temporale sicura: la notarizzazione la **esige**, e una firma senza
+# viene rifiutata da Apple con un errore che non nomina il timestamp. Non e'
+# pero' il default perche' richiede la rete: un `build.sh` offline deve
+# continuare a produrre un'app che gira su questa macchina. `release.sh` la
+# accende.
+[[ "${WATT_TIMESTAMP:-0}" == "1" ]] && SIGN_OPTS+=(--timestamp)
 if [[ "${WATT_UNSIGNED:-0}" == "1" || -z "$IDENTITY" ]]; then
     IDENTITY="-"
     TEAM_ID="ADHOC"
