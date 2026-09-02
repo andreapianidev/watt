@@ -28,10 +28,12 @@ doing at all.
    hero shot is in Italian and says so in the caption, which is honest but
    costs conversions on an English page.
 
-3. **The GitHub repository page.** Description, topics
-   (`macos`, `apple-silicon`, `swift`, `menubar`, `thermal`, `power-management`,
-   `open-source`), and a website link. Product Hunt visitors who click through
-   land there, not on the README anchor you had in mind.
+3. **The website link on the GitHub page.** Description and topics are already
+   set, fifteen of them including `apple-silicon`, `ioreport`, `thermal`,
+   `tgpro-alternative`. What is missing is the *Website* field, which is the
+   link GitHub shows in the sidebar and the one visitors coming from Product
+   Hunt click. Point it at the release, or at
+   [andreapiani.com](https://andreapiani.com).
 
 Nice to have, in decreasing order of value: a 10 to 15 second GIF of the bar
 going red under load, a Homebrew cask, an issue template.
