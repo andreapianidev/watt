@@ -189,6 +189,29 @@ staying limited for twenty minutes is one piece of news, not twenty.
 
 ---
 
+<!--
+Screenshot gallery. Uncomment once the English captures listed in
+docs/SCREENSHOTS.md are in docs/. Keep the same files in README.it.md and
+translate only the alt text.
+
+## Screenshots
+
+<div align="center">
+  <img src="docs/watt-throttle-en.png" alt="The menu bar icon turned red while the Mac is throttling, showing the fraction of the silicon ceiling actually being delivered" width="380">
+  <br>
+  <sub>Throttling, with what you are actually getting.</sub>
+  <br><br>
+  <img src="docs/watt-diagnose-en.png" alt="Terminal output of Watt --diagnose: the verdict, the measurements behind it and the remedy" width="720">
+  <br>
+  <sub><code>Watt --diagnose</code>: every verdict carries the number it rests on.</sub>
+  <br><br>
+  <img src="docs/watt-battery-en.png" alt="The battery section: both health percentages, cycles, charger and system power from the wall" width="380">
+  <img src="docs/watt-settings-en.png" alt="Settings: the three alert switches and the temperature threshold picker" width="380">
+</div>
+
+---
+-->
+
 ## 📊 Benchmarks, measured on a MacBook Air M2
 
 Everything below is reproducible with the scripts in this repository.

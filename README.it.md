@@ -161,6 +161,29 @@ per venti minuti è una notizia sola, non venti.
 
 ---
 
+<!--
+Galleria degli screenshot. Da scommentare quando in docs/ ci sono le catture
+elencate in docs/SCREENSHOTS.md. Gli stessi file di README.md, con il testo
+alternativo tradotto.
+
+## Schermate
+
+<div align="center">
+  <img src="docs/watt-throttle-en.png" alt="L'icona in barra dei menu diventata rossa mentre il Mac è limitato, con la frazione del tetto del silicio effettivamente erogata" width="380">
+  <br>
+  <sub>La limitazione, con quanto stai davvero ottenendo.</sub>
+  <br><br>
+  <img src="docs/watt-diagnose-en.png" alt="Output nel terminale di Watt --diagnose: il verdetto, le misure su cui si regge e il rimedio" width="720">
+  <br>
+  <sub><code>Watt --diagnose</code>: ogni verdetto porta con sé il numero su cui si regge.</sub>
+  <br><br>
+  <img src="docs/watt-battery-en.png" alt="La sezione batteria: entrambe le percentuali di salute, i cicli, il caricatore e la potenza assorbita dalla presa" width="380">
+  <img src="docs/watt-settings-en.png" alt="Impostazioni: i tre interruttori degli avvisi e la soglia di temperatura" width="380">
+</div>
+
+---
+-->
+
 ## 📊 I numeri, misurati su un MacBook Air M2
 
 Tutto quello che segue è riproducibile con gli script nel repository.
